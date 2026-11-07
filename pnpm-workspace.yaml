@@ -1,0 +1,11 @@
+packages:
+  - server
+  - web
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+
+# 与运行环境默认一致（DSH pnpm 包装器始终传 --config.minimumReleaseAge=0）；
+# 否则 pnpm >=11 默认的 24h 供应链年龄策略会拒绝 lockfile 中刚发布不久的包
+minimumReleaseAge: 0
+

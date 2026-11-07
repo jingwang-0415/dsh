@@ -1,0 +1,147 @@
+import type { FastifyInstance } from 'fastify'
+import type Database from 'better-sqlite3'
+import type { AppConfig, RepoConfig } from './config.js'
+import type { Scheduler } from './scheduler.js'
+import type { SseHub } from './sse.js'
+import type { PlatformAdapter } from './platform/types.js'
+import { GitCommandError } from './gitRunner.js'
+import { aheadBehind, compareBranches, inclusionForCommit, type BranchStatus } from './analyzer.js'
+import { listCommits } from './sync.js'
+import type { CommitInfo } from './parse.js'
+
+interface BranchDbRow {
+  name: string; status: string; head_sha: string | null; rewritten_at: number | null
+}
+interface CommitDbRow {
+  sha: string; author_name: string | null; author_email: string | null
+  committed_at: number; subject: string | null; body: string | null; first_seen_branch: string | null
+}
+
+export interface ApiDeps {
+  config: AppConfig
+  db: Database.Database
+  mirrorDirFor(repoId: string): string
+  scheduler: Scheduler
+  sse: SseHub
+  adapter: PlatformAdapter
+}
+
+function mapCommit(r: CommitDbRow): Record<string, unknown> {
+  return {
+    sha: r.sha, authorName: r.author_name, authorEmail: r.author_email,
+    committedAt: r.committed_at, subject: r.subject, body: r.body, firstSeenBranch: r.first_seen_branch
+  }
+}
+
+// listCommits 返回镜像侧 CommitInfo（camelCase），适配为 mapCommit 的 DB 行形状；
+// 镜像列表不经 DB，first_seen_branch 置 null 表示"此处无从给出"
+function toDbRowShape(c: CommitInfo): CommitDbRow {
+  return {
+    sha: c.sha, author_name: c.authorName, author_email: c.authorEmail,
+    committed_at: c.committedAt, subject: c.subject, body: c.body, first_seen_branch: null
+  }
+}
+
+export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<void> {
+  const { db, config } = deps
+  const repo: RepoConfig = config.repos[0]   // v1 单仓库
+  const mirrorDir = deps.mirrorDirFor(repo.id)
+
+  app.get('/api/status', async () => {
+    const lastFetch = db.prepare(`SELECT * FROM fetch_events WHERE repo_id=? ORDER BY id DESC LIMIT 1`).get(repo.id) ?? null
+    return { ...deps.scheduler.status, mirrorDir, lastFetch }
+  })
+
+  app.get('/api/repos', async () =>
+    config.repos.map(({ id, url, defaultBranch, pollIntervalSeconds }) => ({ id, url, defaultBranch, pollIntervalSeconds }))
+  )
+
+  app.get('/api/branches', async () => {
+    const rows = db.prepare(`SELECT * FROM branches WHERE repo_id=? ORDER BY name`).all(repo.id) as BranchDbRow[]
+    const now = Date.now()
+    const out = []
+    for (const r of rows) {
+      const head = r.head_sha
+        ? db.prepare(`SELECT * FROM commits WHERE repo_id=? AND sha=?`).get(repo.id, r.head_sha) as CommitDbRow | undefined
+        : undefined
+      let behindDefault: number | null = null
+      if (r.status === 'active') {
+        try { behindDefault = (await aheadBehind(mirrorDir, repo.defaultBranch, r.name)).ahead }
+        catch { behindDefault = null }
+      }
+      const recent = db.prepare(
+        `SELECT COUNT(*) AS n FROM commits WHERE repo_id=? AND first_seen_branch=? AND first_seen_at>?`
+      ).get(repo.id, r.name, now - 24 * 3600 * 1000) as { n: number }
+      out.push({
+        name: r.name, status: r.status, headSha: r.head_sha,
+        lastSubject: head?.subject ?? null, lastAuthor: head?.author_name ?? null,
+        lastCommitAt: head?.committed_at ?? null,
+        behindDefault, rewritten: r.rewritten_at != null, recentCommits: recent.n
+      })
+    }
+    return out
+  })
+
+  app.get('/api/commits', async (req, reply) => {
+    const q = req.query as { branch?: string; limit?: string; offset?: string }
+    if (!q.branch) return reply.code(400).send({ code: 'bad_request', message: '缺少 branch 参数' })
+    // 非法分页参数若放行，NaN 会绕过 --max-count 触发整分支全量 rev-list（可反复打满 CPU），
+    // 负数/浮点则让 git 报错伪装成 404；这里统一前置校验
+    const limit = q.limit === undefined ? 50 : Number(q.limit)
+    const offset = q.offset === undefined ? 0 : Number(q.offset)
+    if (!Number.isInteger(limit) || limit < 1 || !Number.isInteger(offset) || offset < 0) {
+      return reply.code(400).send({ code: 'bad_request', message: 'limit/offset 需为整数（limit≥1，offset≥0）' })
+    }
+    try {
+      const commits = await listCommits(mirrorDir, `refs/heads/${q.branch}`, {
+        maxCount: limit, skip: offset
+      })
+      return commits.map(c => mapCommit(toDbRowShape(c)))
+    } catch (e) {
+      if (e instanceof GitCommandError) return reply.code(404).send({ code: 'branch_not_found' })
+      throw e
+    }
+  })
+
+  app.get('/api/commits/:sha', async (req, reply) => {
+    const { sha } = req.params as { sha: string }
+    const row = db.prepare(`SELECT * FROM commits WHERE repo_id=? AND sha=?`).get(repo.id, sha) as CommitDbRow | undefined
+    if (!row) return reply.code(404).send({ code: 'commit_not_found' })
+    const meta = deps.adapter.enrichCommit ? await deps.adapter.enrichCommit(sha) : null
+    return { ...mapCommit(row), meta: meta ?? {} }
+  })
+
+  app.get('/api/commits/:sha/inclusion', async (req, reply) => {
+    const { sha } = req.params as { sha: string }
+    const row = db.prepare(`SELECT * FROM commits WHERE repo_id=? AND sha=?`).get(repo.id, sha) as CommitDbRow | undefined
+    if (!row) return reply.code(404).send({ code: 'commit_not_found' })
+    const branchRows = db.prepare(`SELECT name, status, rewritten_at FROM branches WHERE repo_id=?`).all(repo.id) as BranchDbRow[]
+    const branches = branchRows.map(b => ({
+      name: b.name,
+      status: (b.status === 'deleted' ? 'deleted' : b.rewritten_at != null ? 'rewritten' : 'active') as BranchStatus
+    }))
+    try {
+      const results = await inclusionForCommit(mirrorDir, sha, branches)
+      results.sort((a, b) => Number(a.contains) - Number(b.contains))  // 未包含在前
+      return { commit: mapCommit(row), results }
+    } catch (e) {
+      if (e instanceof GitCommandError) return reply.code(404).send({ code: 'commit_not_found' })
+      throw e
+    }
+  })
+
+  app.get('/api/compare', async (req, reply) => {
+    const q = req.query as { base?: string; target?: string }
+    if (!q.base || !q.target) return reply.code(400).send({ code: 'bad_request', message: '缺少 base/target 参数' })
+    try {
+      return await compareBranches(mirrorDir, q.base, q.target)
+    } catch (e) {
+      if (e instanceof GitCommandError) return reply.code(404).send({ code: 'branch_not_found' })
+      throw e
+    }
+  })
+
+  app.get('/api/events', (_req, reply) => {
+    deps.sse.add(reply)
+  })
+}

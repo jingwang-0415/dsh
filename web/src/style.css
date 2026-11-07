@@ -1,0 +1,56 @@
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body { font-family: system-ui, -apple-system, "PingFang SC", sans-serif; margin: 0; color: #1f2328; background: #f6f8fa; }
+.app { max-width: 1080px; margin: 0 auto; padding: 16px; }
+.nav { display: flex; gap: 16px; margin-bottom: 16px; font-size: 15px; }
+.nav a { text-decoration: none; color: #0969da; padding: 4px 8px; border-radius: 6px; }
+.nav a.router-link-active { background: #ddf4ff; }
+h2, h3 { margin: 12px 0 8px; }
+.muted { color: #656d76; font-size: 13px; }
+.muted.err { color: #cf222e; }
+code { background: #eff1f3; padding: 1px 5px; border-radius: 4px; }
+
+.banner { padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; font-size: 14px; }
+.banner-green { background: #dafbe1; color: #116329; }
+.banner-yellow { background: #fff8c5; color: #7d4e00; }
+.banner-red { background: #ffebe9; color: #cf222e; }
+.banner-gray { background: #eaeef2; color: #57606a; }
+
+.tbl { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; }
+.tbl th, .tbl td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #d0d7de; font-size: 14px; }
+.tbl th { background: #f6f8fa; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; border: none; cursor: default; }
+button.badge { cursor: pointer; }
+.badge-red { background: #ffebe9; color: #cf222e; }
+.badge-green { background: #dafbe1; color: #116329; }
+.badge-yellow { background: #fff8c5; color: #7d4e00; }
+.badge-gray { background: #eaeef2; color: #57606a; }
+.badge-blue { background: #ddf4ff; color: #0969da; }
+
+.rows { list-style: none; padding: 0; margin: 0; }
+.row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px; margin-bottom: 4px; background: #fff; font-size: 14px; }
+.row-miss { background: #ffebe9; color: #cf222e; font-weight: 600; }
+.row-ok { background: #dafbe1; color: #116329; }
+.row-other { background: #eaeef2; color: #57606a; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dot-red { background: #cf222e; }
+.dot-green { background: #1a7f37; }
+.dot-gray { background: #8c959f; }
+
+.btn { border: 1px solid #d0d7de; background: #f6f8fa; border-radius: 6px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
+.btn:hover { background: #eaeef2; }
+
+.commit-body { background: #fff; padding: 10px; border-radius: 6px; white-space: pre-wrap; font-size: 13px; }
+.pick { display: flex; gap: 16px; margin-bottom: 12px; }
+.pick select { padding: 4px 8px; border-radius: 6px; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+a { color: #0969da; text-decoration: none; }
+@media (prefers-color-scheme: dark) {
+  body { background: #0d1117; color: #e6edf3; }
+  .tbl, .row, .commit-body, .rows .row { background: #161b22; border-color: #30363d; }
+  .tbl th { background: #161b22; }
+  .muted { color: #8b949e; }
+  code { background: #21262d; }
+  .nav a.router-link-active { background: #121d2f; }
+}

@@ -533,6 +533,14 @@ describe('runGit', () => {
   it('超时 kill 并报超时错误', async () => {
     await expect(runGit('.', ['5'], { timeoutMs: 100, bin: 'sleep' })).rejects.toThrow(/超时/)
   })
+
+  it('大体积 CJK 输出在分块边界不损坏（Buffer 拼接后解码）', async () => {
+    const bigFile = join(mkdtempSync(join(tmpdir(), 'gsm-cjk-')), 'big.txt')
+    const content = Array.from({ length: 20_000 }, (_, i) => `第${i}行：中文提交主题测试，多字节UTF8。`).join('\n')
+    writeFileSync(bigFile, content, 'utf8')
+    const r = await runGit('.', [bigFile], { bin: 'cat' })
+    expect(r.stdout).toBe(content)
+  })
 })
 ```
 
@@ -560,15 +568,18 @@ export async function runGit(cwd: string, args: string[], opts: RunGitOptions = 
   const { timeoutMs = 60_000, bin = 'git' } = opts
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = ''
-    let stderr = ''
+    const stdoutChunks: Buffer[] = []
+    const stderrChunks: Buffer[] = []
     let timedOut = false
     const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL') }, timeoutMs)
-    child.stdout!.on('data', (d: Buffer) => { stdout += d })
-    child.stderr!.on('data', (d: Buffer) => { stderr += d })
+    child.stdout!.on('data', (d: Buffer) => { stdoutChunks.push(d) })
+    child.stderr!.on('data', (d: Buffer) => { stderrChunks.push(d) })
     child.on('error', err => { clearTimeout(timer); reject(err) })
     child.on('close', code => {
       clearTimeout(timer)
+      // 先拼 Buffer 再解码：避免多字节 UTF-8 在管道分块边界被截断损坏
+      const stdout = Buffer.concat(stdoutChunks).toString('utf8')
+      const stderr = Buffer.concat(stderrChunks).toString('utf8')
       if (timedOut) reject(new Error(`${bin} ${args.join(' ')} 超时 (${timeoutMs}ms)`))
       else if (code === 0) resolve({ stdout, stderr })
       else reject(new GitCommandError(args, code, stderr))
@@ -1050,7 +1061,7 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { createOriginRepo } from './fixture.js'
-import { ensureMirror } from '../src/mirror.js'
+import { ensureMirror, fetchMirror } from '../src/mirror.js'
 import { openDb } from '../src/db.js'
 import { applyChanges, backfillRepo, finishFetchEvent, insertCommits, startFetchEvent } from '../src/sync.js'
 import { listCommits } from '../src/sync.js'
@@ -1094,6 +1105,7 @@ describe('sync（真实 git fixture）', () => {
 
     const oldSha = headSha(origin.dir)
     origin.commitFile('n.txt', 'new')
+    await fetchMirror(mirrorDir)   // 调度器真实流程：fetch 之后才做 diff/classify（否则镜像缺对象，merge-base exit 128 误判 force-push）
     const newSha = headSha(origin.dir)
     const changes = await classifyChanges(mirrorDir, diffRefs({ master: oldSha }, { master: newSha }))
     const r = await applyChanges(db, 'r', mirrorDir, changes)
@@ -1112,7 +1124,8 @@ describe('sync（真实 git fixture）', () => {
     await backfillRepo(db, 'r', mirrorDir, [{ branch: 'master', sha: headSha(origin.dir) }])
 
     const oldSha = headSha(origin.dir)
-    origin.git(['commit', '--amend', '--no-edit'])
+    origin.git(['commit', '--amend', '--no-edit', '--allow-empty', '--date=2005-04-07T22:13:13 +0000'])  // 固定作者日期保证对象必然不同（同秒 amend 会产生相同 SHA，Task 5 先例）
+    await fetchMirror(mirrorDir)   // 使镜像可见新对象，走 exit-1 真实祖先判定路径
     const amended = headSha(origin.dir)
     const changes = await classifyChanges(mirrorDir, diffRefs({ master: oldSha }, { master: amended }))
     await applyChanges(db, 'r', mirrorDir, changes)
@@ -1124,8 +1137,6 @@ describe('sync（真实 git fixture）', () => {
     finishFetchEvent(db, evId, 'ok', 0)
     expect((db.prepare(`SELECT status FROM fetch_events WHERE id=?`).get(evId) as { status: string }).status).toBe('ok')
 
-    const changes2 = await classifyChanges(mirrorDir, diffRefs({ master: amended }, {}))
-    void changes2
     await applyChanges(db, 'r', mirrorDir, [{ type: 'deleted', branch: 'master', oldSha: amended }])
     expect((db.prepare(`SELECT status FROM branches WHERE repo_id='r' AND name='master'`).get() as { status: string }).status).toBe('deleted')
     db.close()
@@ -1175,12 +1186,22 @@ export const REVLIST_FORMAT = '--format=%H%x1f%an%x1f%ae%x1f%ct%x1f%s%x1f%b%x1e'
 export function parseRevList(raw: string): CommitInfo[] {
   const out: CommitInfo[] = []
   for (const record of raw.split('\x1e')) {
-    const trimmed = record.replace(/^\s*\n/, '').trim()
-    if (!trimmed) continue
-    const nl = trimmed.indexOf('\n')
-    if (nl === -1) continue
-    const sha = trimmed.slice(0, nl).trim()
-    const fields = trimmed.slice(nl + 1).split('\x1f')
+    const lines = record.replace(/^\s*\n/, '').trim().split('\n')
+    // rev-list --format 每条记录先输出 "commit <sha>" 头行（git log 无此行为），剥离
+    if (lines[0]?.startsWith('commit ')) lines.shift()
+    if (!lines[0]) continue
+    let sha: string
+    let fields: string[]
+    if (lines[0].includes('\x1f')) {
+      // 真实布局（Task 7 审查探针实证）：头行后 <sha> 与字段同行，\x1f 分隔；按 \n 拼回保证含换行的 body 完整
+      fields = lines.join('\n').split('\x1f')
+      sha = fields.shift() ?? ''
+    } else {
+      // 兼容无头行布局：<sha> 单独一行，字段从下一行开始
+      if (lines.length < 2) continue
+      sha = lines[0].trim()
+      fields = lines.slice(1).join('\n').split('\x1f')
+    }
     out.push({
       sha,
       authorName: fields[0] ?? '',
@@ -1355,8 +1376,9 @@ describe('inclusionForCommit', () => {
     origin.git(['merge', 'master', '--no-edit'])                  // 合并 → 包含 fixSha
     origin.git(['checkout', 'master'])
     origin.commitFile('next.txt', 'n')                            // master 又前进
-    origin.git(['checkout', '-b', 'cherry-side', 'master~1'])     // 基于 fixSha~1
+    origin.git(['checkout', '-b', 'cherry-side', 'master~2'])     // 基于 fixSha 之前的提交
     origin.git(['cherry-pick', fixSha])                           // cherry-pick → 新 sha
+    origin.git(['commit', '--amend', '--no-edit', '--date=2005-04-07T22:13:13 +0000'])  // cherry-pick 保留原 author 日期，同秒内会与 fixSha 字节相同；amend 改日期保证对象必异（Task 8 先例）
     origin.git(['checkout', 'master'])
 
     const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
