@@ -229,9 +229,11 @@ describe('buildPathspecs', () => {
 
 describe('branchFingerprints（真实 git，独立双仓）', () => {
   it('同补丁不同 SHA → 指纹相同；单向补丁 → 仅入一侧', async () => {
-    // 两个完全独立 init 的仓（不同初始内容，确保无共享 SHA）
+    // 两个完全独立 init 的仓；先各补一个不同内容的提交，确保两仓 HEAD SHA 必然不同（同秒创建的初始提交会字节级相同——仓库既定经验）
     const a = createOriginRepo('gsm-pa-')
     const b = createOriginRepo('gsm-pb-')
+    a.commitFile('a-base.txt', 'a\n')
+    b.commitFile('b-base.txt', 'b\n')
     a.git(['checkout', '-b', 'side'])
     const shaA = a.commitFile('fix.txt', 'same content\n')
     b.git(['checkout', '-b', 'side'])
@@ -363,6 +365,8 @@ describe('crossCompare（真实 git 独立双仓）', () => {
   it('同补丁跨仓命中 matched；单向补丁入 onlyIn', async () => {
     const a = createOriginRepo('gsm-ca-')
     const b = createOriginRepo('gsm-cb-')
+    a.commitFile('a-base.txt', 'a\n')
+    b.commitFile('b-base.txt', 'b\n')
     a.git(['checkout', '-b', 'dev'])
     const shaSameA = a.commitFile('same.txt', 'identical patch\n')
     const shaOnlyA = a.commitFile('only-a.txt', 'only a\n')
