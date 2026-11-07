@@ -1124,8 +1124,6 @@ describe('sync（真实 git fixture）', () => {
     finishFetchEvent(db, evId, 'ok', 0)
     expect((db.prepare(`SELECT status FROM fetch_events WHERE id=?`).get(evId) as { status: string }).status).toBe('ok')
 
-    const changes2 = await classifyChanges(mirrorDir, diffRefs({ master: amended }, {}))
-    void changes2
     await applyChanges(db, 'r', mirrorDir, [{ type: 'deleted', branch: 'master', oldSha: amended }])
     expect((db.prepare(`SELECT status FROM branches WHERE repo_id='r' AND name='master'`).get() as { status: string }).status).toBe('deleted')
     db.close()
@@ -1355,7 +1353,7 @@ describe('inclusionForCommit', () => {
     origin.git(['merge', 'master', '--no-edit'])                  // 合并 → 包含 fixSha
     origin.git(['checkout', 'master'])
     origin.commitFile('next.txt', 'n')                            // master 又前进
-    origin.git(['checkout', '-b', 'cherry-side', 'master~1'])     // 基于 fixSha~1
+    origin.git(['checkout', '-b', 'cherry-side', 'master~2'])     // 基于 fixSha 之前的提交
     origin.git(['cherry-pick', fixSha])                           // cherry-pick → 新 sha
     origin.git(['checkout', 'master'])
 
