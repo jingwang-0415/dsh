@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 
 export interface GitResult { stdout: string; stderr: string }
 
-export interface RunGitOptions { timeoutMs?: number; bin?: string }
+export interface RunGitOptions { timeoutMs?: number; bin?: string; input?: string }
 
 export class GitCommandError extends Error {
   constructor(readonly args: string[], readonly exitCode: number | null, readonly stderr: string) {
@@ -11,9 +11,10 @@ export class GitCommandError extends Error {
 }
 
 export async function runGit(cwd: string, args: string[], opts: RunGitOptions = {}): Promise<GitResult> {
-  const { timeoutMs = 60_000, bin = 'git' } = opts
+  const { timeoutMs = 60_000, bin = 'git', input } = opts
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(bin, args, { cwd, stdio: [input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'] })
+    child.stdin?.on('error', () => {})
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
     let timedOut = false
@@ -21,6 +22,7 @@ export async function runGit(cwd: string, args: string[], opts: RunGitOptions = 
     child.stdout!.on('data', (d: Buffer) => { stdoutChunks.push(d) })
     child.stderr!.on('data', (d: Buffer) => { stderrChunks.push(d) })
     child.on('error', err => { clearTimeout(timer); reject(err) })
+    if (input !== undefined) child.stdin!.end(input)
     child.on('close', code => {
       clearTimeout(timer)
       const stdout = Buffer.concat(stdoutChunks).toString('utf8')
