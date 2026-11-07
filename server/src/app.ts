@@ -21,7 +21,7 @@ export interface AppOptions {
 export interface AppHandle {
   app: FastifyInstance
   config: AppConfig
-  scheduler: Scheduler
+  schedulers: Scheduler[]
   sse: SseHub
   close(): Promise<void>
 }
@@ -33,29 +33,31 @@ export async function buildApp(options: AppOptions = {}): Promise<AppHandle> {
   const db: Database.Database = openDb(join(dataDir, 'monitor.db'))
   const mirrorDirFor = (repoId: string): string => join(dataDir, 'repos', repoId)
   const sse: SseHub = createSseHub()
-  const repo = config.repos[0]
   // repos 表是 fetch_events/branches/commits 外键的宿主（openDb 开启 foreign_keys），
-  // 装配时幂等登记，否则调度器首跑即因 FK 约束失败；
+  // 装配时逐仓幂等登记，否则调度器首跑即因 FK 约束失败；
   // 同 id 改 URL 时 upsert 更新 url/default_branch，created_at 保留原值
-  db.prepare(
-    `INSERT INTO repos (id, url, default_branch, created_at) VALUES (?,?,?,?)
-     ON CONFLICT(id) DO UPDATE SET url=excluded.url, default_branch=excluded.default_branch`
-  ).run(repo.id, repo.url, repo.defaultBranch, Date.now())
-
-  const scheduler = new Scheduler({
-    db, repo, mirrorDir: mirrorDirFor(repo.id),
-    handlers: {
-      onCommitsNew: (branch, commits) => sse.publish('commits.new', {
-        branch, count: commits.length, subjects: commits.slice(0, 5).map(c => c.subject)
-      }),
-      onBranchesUpdated: () => sse.publish('branches.updated', {}),
-      onStatus: s => sse.publish('status.changed', s)
-    }
+  const schedulers: Scheduler[] = config.repos.map(repo => {
+    const mirrorDir = mirrorDirFor(repo.id)
+    db.prepare(
+      `INSERT INTO repos (id, url, default_branch, created_at) VALUES (?,?,?,?)
+       ON CONFLICT(id) DO UPDATE SET url=excluded.url, default_branch=excluded.default_branch`
+    ).run(repo.id, repo.url, repo.defaultBranch, Date.now())
+    return new Scheduler({
+      db, repo, mirrorDir,
+      handlers: {
+        onCommitsNew: (branch, commits) => sse.publish('commits.new', {
+          repoId: repo.id, branch, count: commits.length,
+          subjects: commits.slice(0, 5).map(c => c.subject)
+        }),
+        onBranchesUpdated: () => sse.publish('branches.updated', { repoId: repo.id }),
+        onStatus: st => sse.publish('status.changed', { repoId: repo.id, ...st })
+      }
+    })
   })
 
   const app = Fastify({ logger: false })
   app.get('/api/ping', async () => ({ pong: true }))
-  await registerApi(app, { config, db, mirrorDirFor, scheduler, sse, adapter: options.adapter ?? nullAdapter })
+  await registerApi(app, { config, db, mirrorDirFor, schedulers, sse, adapter: options.adapter ?? nullAdapter })
 
   const webDist = join(dirname(fileURLToPath(import.meta.url)), '../../web/dist')
   if (existsSync(webDist)) {
@@ -68,12 +70,12 @@ export async function buildApp(options: AppOptions = {}): Promise<AppHandle> {
   }
 
   const close = async (): Promise<void> => {
-    scheduler.stop()
+    schedulers.forEach(s => s.stop())
     // hijack 的 SSE 流对 Fastify 非 idle，app.close() 只清 idle 连接会永久悬挂；
     // 先同步销毁全部 SSE 客户端再走正常关闭
     sse.closeAll()
     await app.close()
     db.close()
   }
-  return { app, config, scheduler, sse, close }
+  return { app, config, schedulers, sse, close }
 }

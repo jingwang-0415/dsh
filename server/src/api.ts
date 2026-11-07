@@ -5,6 +5,7 @@ import type { Scheduler } from './scheduler.js'
 import type { SseHub } from './sse.js'
 import type { PlatformAdapter } from './platform/types.js'
 import { GitCommandError } from './gitRunner.js'
+import { crossCompare } from './crossrepo.js'
 import { aheadBehind, compareBranches, inclusionForCommit, type BranchStatus } from './analyzer.js'
 import { listCommits } from './sync.js'
 import type { CommitInfo } from './parse.js'
@@ -21,7 +22,7 @@ export interface ApiDeps {
   config: AppConfig
   db: Database.Database
   mirrorDirFor(repoId: string): string
-  scheduler: Scheduler
+  schedulers: Scheduler[]
   sse: SseHub
   adapter: PlatformAdapter
 }
@@ -43,20 +44,31 @@ function toDbRowShape(c: CommitInfo): CommitDbRow {
 }
 
 export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<void> {
-  const { db, config } = deps
-  const repo: RepoConfig = config.repos[0]   // v1 单仓库
-  const mirrorDir = deps.mirrorDirFor(repo.id)
+  const { db, config, schedulers } = deps
 
-  app.get('/api/status', async () => {
+  // repo 作用域：?repo= 指定仓（app.ts 装配保证 schedulers 与 config.repos 同序同长）；
+  // 缺省取第一个仓，未知 id → null（端点统一回 404 repo_not_found）
+  function resolveRepo(qRepo: string | undefined): RepoConfig | null {
+    if (!qRepo) return config.repos[0]
+    return config.repos.find(r => r.id === qRepo) ?? null
+  }
+
+  app.get('/api/status', async (req, reply) => {
+    const repo = resolveRepo((req.query as { repo?: string }).repo)
+    if (!repo) return reply.code(404).send({ code: 'repo_not_found' })
+    const mirrorDir = deps.mirrorDirFor(repo.id)
     const lastFetch = db.prepare(`SELECT * FROM fetch_events WHERE repo_id=? ORDER BY id DESC LIMIT 1`).get(repo.id) ?? null
-    return { ...deps.scheduler.status, mirrorDir, lastFetch }
+    return { repoId: repo.id, ...schedulers[config.repos.indexOf(repo)].status, mirrorDir, lastFetch }
   })
 
   app.get('/api/repos', async () =>
     config.repos.map(({ id, url, defaultBranch, pollIntervalSeconds }) => ({ id, url, defaultBranch, pollIntervalSeconds }))
   )
 
-  app.get('/api/branches', async () => {
+  app.get('/api/branches', async (req, reply) => {
+    const repo = resolveRepo((req.query as { repo?: string }).repo)
+    if (!repo) return reply.code(404).send({ code: 'repo_not_found' })
+    const mirrorDir = deps.mirrorDirFor(repo.id)
     const rows = db.prepare(`SELECT * FROM branches WHERE repo_id=? ORDER BY name`).all(repo.id) as BranchDbRow[]
     const now = Date.now()
     const out = []
@@ -83,6 +95,8 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
   })
 
   app.get('/api/commits', async (req, reply) => {
+    const repo = resolveRepo((req.query as { repo?: string }).repo)
+    if (!repo) return reply.code(404).send({ code: 'repo_not_found' })
     const q = req.query as { branch?: string; limit?: string; offset?: string }
     if (!q.branch) return reply.code(400).send({ code: 'bad_request', message: '缺少 branch 参数' })
     // 非法分页参数若放行，NaN 会绕过 --max-count 触发整分支全量 rev-list（可反复打满 CPU），
@@ -93,7 +107,7 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
       return reply.code(400).send({ code: 'bad_request', message: 'limit/offset 需为整数（limit≥1，offset≥0）' })
     }
     try {
-      const commits = await listCommits(mirrorDir, `refs/heads/${q.branch}`, {
+      const commits = await listCommits(deps.mirrorDirFor(repo.id), `refs/heads/${q.branch}`, {
         maxCount: limit, skip: offset
       })
       return commits.map(c => mapCommit(toDbRowShape(c)))
@@ -104,6 +118,8 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
   })
 
   app.get('/api/commits/:sha', async (req, reply) => {
+    const repo = resolveRepo((req.query as { repo?: string }).repo)
+    if (!repo) return reply.code(404).send({ code: 'repo_not_found' })
     const { sha } = req.params as { sha: string }
     const row = db.prepare(`SELECT * FROM commits WHERE repo_id=? AND sha=?`).get(repo.id, sha) as CommitDbRow | undefined
     if (!row) return reply.code(404).send({ code: 'commit_not_found' })
@@ -112,6 +128,8 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
   })
 
   app.get('/api/commits/:sha/inclusion', async (req, reply) => {
+    const repo = resolveRepo((req.query as { repo?: string }).repo)
+    if (!repo) return reply.code(404).send({ code: 'repo_not_found' })
     const { sha } = req.params as { sha: string }
     const row = db.prepare(`SELECT * FROM commits WHERE repo_id=? AND sha=?`).get(repo.id, sha) as CommitDbRow | undefined
     if (!row) return reply.code(404).send({ code: 'commit_not_found' })
@@ -121,7 +139,7 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
       status: (b.status === 'deleted' ? 'deleted' : b.rewritten_at != null ? 'rewritten' : 'active') as BranchStatus
     }))
     try {
-      const results = await inclusionForCommit(mirrorDir, sha, branches)
+      const results = await inclusionForCommit(deps.mirrorDirFor(repo.id), sha, branches)
       results.sort((a, b) => Number(a.contains) - Number(b.contains))  // 未包含在前
       return { commit: mapCommit(row), results }
     } catch (e) {
@@ -131,10 +149,12 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
   })
 
   app.get('/api/compare', async (req, reply) => {
+    const repo = resolveRepo((req.query as { repo?: string }).repo)
+    if (!repo) return reply.code(404).send({ code: 'repo_not_found' })
     const q = req.query as { base?: string; target?: string }
     if (!q.base || !q.target) return reply.code(400).send({ code: 'bad_request', message: '缺少 base/target 参数' })
     try {
-      return await compareBranches(mirrorDir, q.base, q.target)
+      return await compareBranches(deps.mirrorDirFor(repo.id), q.base, q.target)
     } catch (e) {
       if (e instanceof GitCommandError) return reply.code(404).send({ code: 'branch_not_found' })
       throw e
@@ -143,5 +163,53 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
 
   app.get('/api/events', (_req, reply) => {
     deps.sse.add(reply)
+  })
+
+  // —— 跨仓对比：把 T2 crossCompare 引擎暴露为 HTTP 契约 ——
+
+  // 同名分支配对：仅 active 分支入库参与配对，ORDER BY name 保证输出稳定
+  app.get('/api/crossrepo/branches', async (req, reply) => {
+    const q = req.query as { repoA?: string; repoB?: string }
+    const [ra, rb] = [resolveRepo(q.repoA), resolveRepo(q.repoB)]
+    if (!ra || !rb) return reply.code(404).send({ code: 'repo_not_found' })
+    const names = (id: string) => (db.prepare(
+      `SELECT name FROM branches WHERE repo_id=? AND status='active' ORDER BY name`).all(id) as { name: string }[]
+    ).map(r => r.name)
+    const a = names(ra.id); const b = names(rb.id)
+    const paired = a.filter(n => b.includes(n))
+    return {
+      repoA: { id: ra.id, branches: a }, repoB: { id: rb.id, branches: b },
+      paired, unpairedA: a.filter(n => !paired.includes(n)), unpairedB: b.filter(n => !paired.includes(n))
+    }
+  })
+
+  app.get('/api/crossrepo/compare', async (req, reply) => {
+    const q = req.query as { repoA?: string; repoB?: string; branchA?: string; branchB?: string; include?: string; exclude?: string }
+    if (!q.branchA || !q.branchB) return reply.code(400).send({ code: 'bad_request', message: '缺少 branchA/branchB' })
+    const [ra, rb] = [resolveRepo(q.repoA), resolveRepo(q.repoB)]
+    if (!ra || !rb) return reply.code(404).send({ code: 'repo_not_found' })
+    const split = (s?: string) => (s ?? '').split(',').map(x => x.trim()).filter(Boolean)
+    try {
+      const result = await crossCompare(
+        deps.mirrorDirFor(ra.id), q.branchA, deps.mirrorDirFor(rb.id), q.branchB,
+        split(q.include), split(q.exclude)
+      )
+      const [ba, bb] = [
+        (db.prepare(`SELECT name FROM branches WHERE repo_id=? AND status='active' ORDER BY name`).all(ra.id) as { name: string }[]).map(x => x.name),
+        (db.prepare(`SELECT name FROM branches WHERE repo_id=? AND status='active' ORDER BY name`).all(rb.id) as { name: string }[]).map(x => x.name)
+      ]
+      const paired = ba.filter(n => bb.includes(n))
+      return {
+        branchPair: { repoA: ra.id, branchA: q.branchA, repoB: rb.id, branchB: q.branchB },
+        ...result,
+        unpairedBranches: {
+          repoA: ba.filter(n => !paired.includes(n)),
+          repoB: bb.filter(n => !paired.includes(n))
+        }
+      }
+    } catch (e) {
+      if (e instanceof GitCommandError) return reply.code(404).send({ code: 'branch_not_found' })
+      throw e
+    }
   })
 }

@@ -49,16 +49,47 @@ async function getJson<T>(url: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export interface CrossBranchesDto {
+  repoA: { id: string; branches: string[] }
+  repoB: { id: string; branches: string[] }
+  paired: string[]
+  unpairedA: string[]
+  unpairedB: string[]
+}
+export interface CrossCompareDto {
+  branchPair: { repoA: string; branchA: string; repoB: string; branchB: string }
+  onlyInA: CommitRow[]
+  onlyInB: CommitRow[]
+  matchedPairs: { patchId: string; shaA: string; shaB: string; subjectA: string }[]
+  unpairedBranches: { repoA: string[]; repoB: string[] }
+  stats: { aTotal: number; bTotal: number; matched: number; onlyA: number; onlyB: number }
+}
+
+// repo 可选作用域：缺省取服务端第一仓（与 server 端 resolveRepo 语义一致）
+const withRepo = (path: string, repo?: string): string =>
+  repo ? `${path}?repo=${encodeURIComponent(repo)}` : path
+
 export const api = {
-  status: (): Promise<StatusDto> => getJson('/api/status'),
+  status: (repo?: string): Promise<StatusDto> => getJson(withRepo('/api/status', repo)),
   repos: (): Promise<RepoDto[]> => getJson('/api/repos'),
-  branches: (): Promise<BranchRow[]> => getJson('/api/branches'),
-  branchCommits: (branch: string, limit = 100): Promise<CommitRow[]> =>
-    getJson(`/api/commits?branch=${encodeURIComponent(branch)}&limit=${limit}`),
+  branches: (repo?: string): Promise<BranchRow[]> => getJson(withRepo('/api/branches', repo)),
+  branchCommits: (branch: string, limit = 100, repo?: string): Promise<CommitRow[]> => {
+    const u = new URLSearchParams({ branch, limit: String(limit) })
+    if (repo) u.set('repo', repo)
+    return getJson(`/api/commits?${u.toString()}`)
+  },
   commitInclusion: (sha: string): Promise<{ commit: CommitRow; results: InclusionRow[] }> =>
     getJson(`/api/commits/${sha}/inclusion`),
   compare: (base: string, target: string): Promise<CompareDto> =>
-    getJson(`/api/compare?base=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}`)
+    getJson(`/api/compare?base=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}`),
+  crossBranches: (repoA: string, repoB: string): Promise<CrossBranchesDto> =>
+    getJson(`/api/crossrepo/branches?repoA=${encodeURIComponent(repoA)}&repoB=${encodeURIComponent(repoB)}`),
+  crossCompare: (p: { repoA: string; repoB: string; branchA: string; branchB: string; include?: string[]; exclude?: string[] }): Promise<CrossCompareDto> => {
+    const u = new URLSearchParams({ repoA: p.repoA, repoB: p.repoB, branchA: p.branchA, branchB: p.branchB })
+    if (p.include?.length) u.set('include', p.include.join(','))
+    if (p.exclude?.length) u.set('exclude', p.exclude.join(','))
+    return getJson(`/api/crossrepo/compare?${u.toString()}`)
+  }
 }
 
 export function formatRelative(ts: number, now = Date.now()): string {
@@ -84,10 +115,15 @@ export function formatFuture(ts: number, now = Date.now()): string {
   return '稍后'
 }
 
+// v1.1-T1 起 SSE 载荷带 repoId（多仓）：commits.new 增字段，branches.updated/status.changed 增包
+export interface CommitsNewEvent { repoId: string; branch: string; count: number; subjects: string[] }
+export interface BranchesUpdatedEvent { repoId: string }
+export type StatusChangedEvent = StatusDto & { repoId: string }
+
 export interface EventHandlers {
-  onCommitsNew?: (data: { branch: string; count: number; subjects: string[] }) => void
-  onBranchesUpdated?: () => void
-  onStatus?: (data: StatusDto) => void
+  onCommitsNew?: (data: CommitsNewEvent) => void
+  onBranchesUpdated?: (data: BranchesUpdatedEvent) => void
+  onStatus?: (data: StatusChangedEvent) => void
 }
 
 export function connectEvents(handlers: EventHandlers): EventSource {
