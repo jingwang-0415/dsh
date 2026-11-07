@@ -1061,7 +1061,7 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { createOriginRepo } from './fixture.js'
-import { ensureMirror } from '../src/mirror.js'
+import { ensureMirror, fetchMirror } from '../src/mirror.js'
 import { openDb } from '../src/db.js'
 import { applyChanges, backfillRepo, finishFetchEvent, insertCommits, startFetchEvent } from '../src/sync.js'
 import { listCommits } from '../src/sync.js'
@@ -1105,6 +1105,7 @@ describe('sync（真实 git fixture）', () => {
 
     const oldSha = headSha(origin.dir)
     origin.commitFile('n.txt', 'new')
+    await fetchMirror(mirrorDir)   // 调度器真实流程：fetch 之后才做 diff/classify（否则镜像缺对象，merge-base exit 128 误判 force-push）
     const newSha = headSha(origin.dir)
     const changes = await classifyChanges(mirrorDir, diffRefs({ master: oldSha }, { master: newSha }))
     const r = await applyChanges(db, 'r', mirrorDir, changes)
@@ -1123,7 +1124,8 @@ describe('sync（真实 git fixture）', () => {
     await backfillRepo(db, 'r', mirrorDir, [{ branch: 'master', sha: headSha(origin.dir) }])
 
     const oldSha = headSha(origin.dir)
-    origin.git(['commit', '--amend', '--no-edit'])
+    origin.git(['commit', '--amend', '--no-edit', '--allow-empty', '--date=2005-04-07T22:13:13 +0000'])  // 固定作者日期保证对象必然不同（同秒 amend 会产生相同 SHA，Task 5 先例）
+    await fetchMirror(mirrorDir)   // 使镜像可见新对象，走 exit-1 真实祖先判定路径
     const amended = headSha(origin.dir)
     const changes = await classifyChanges(mirrorDir, diffRefs({ master: oldSha }, { master: amended }))
     await applyChanges(db, 'r', mirrorDir, changes)
