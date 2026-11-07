@@ -5,6 +5,7 @@ import type { Scheduler } from './scheduler.js'
 import type { SseHub } from './sse.js'
 import type { PlatformAdapter } from './platform/types.js'
 import { GitCommandError } from './gitRunner.js'
+import { crossCompare } from './crossrepo.js'
 import { aheadBehind, compareBranches, inclusionForCommit, type BranchStatus } from './analyzer.js'
 import { listCommits } from './sync.js'
 import type { CommitInfo } from './parse.js'
@@ -162,5 +163,53 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
 
   app.get('/api/events', (_req, reply) => {
     deps.sse.add(reply)
+  })
+
+  // —— 跨仓对比：把 T2 crossCompare 引擎暴露为 HTTP 契约 ——
+
+  // 同名分支配对：仅 active 分支入库参与配对，ORDER BY name 保证输出稳定
+  app.get('/api/crossrepo/branches', async (req, reply) => {
+    const q = req.query as { repoA?: string; repoB?: string }
+    const [ra, rb] = [resolveRepo(q.repoA), resolveRepo(q.repoB)]
+    if (!ra || !rb) return reply.code(404).send({ code: 'repo_not_found' })
+    const names = (id: string) => (db.prepare(
+      `SELECT name FROM branches WHERE repo_id=? AND status='active' ORDER BY name`).all(id) as { name: string }[]
+    ).map(r => r.name)
+    const a = names(ra.id); const b = names(rb.id)
+    const paired = a.filter(n => b.includes(n))
+    return {
+      repoA: { id: ra.id, branches: a }, repoB: { id: rb.id, branches: b },
+      paired, unpairedA: a.filter(n => !paired.includes(n)), unpairedB: b.filter(n => !paired.includes(n))
+    }
+  })
+
+  app.get('/api/crossrepo/compare', async (req, reply) => {
+    const q = req.query as { repoA?: string; repoB?: string; branchA?: string; branchB?: string; include?: string; exclude?: string }
+    if (!q.branchA || !q.branchB) return reply.code(400).send({ code: 'bad_request', message: '缺少 branchA/branchB' })
+    const [ra, rb] = [resolveRepo(q.repoA), resolveRepo(q.repoB)]
+    if (!ra || !rb) return reply.code(404).send({ code: 'repo_not_found' })
+    const split = (s?: string) => (s ?? '').split(',').map(x => x.trim()).filter(Boolean)
+    try {
+      const result = await crossCompare(
+        deps.mirrorDirFor(ra.id), q.branchA, deps.mirrorDirFor(rb.id), q.branchB,
+        split(q.include), split(q.exclude)
+      )
+      const [ba, bb] = [
+        (db.prepare(`SELECT name FROM branches WHERE repo_id=? AND status='active'`).all(ra.id) as { name: string }[]).map(x => x.name),
+        (db.prepare(`SELECT name FROM branches WHERE repo_id=? AND status='active'`).all(rb.id) as { name: string }[]).map(x => x.name)
+      ]
+      const paired = ba.filter(n => bb.includes(n))
+      return {
+        branchPair: { repoA: ra.id, branchA: q.branchA, repoB: rb.id, branchB: q.branchB },
+        ...result,
+        unpairedBranches: {
+          repoA: ba.filter(n => !paired.includes(n)),
+          repoB: bb.filter(n => !paired.includes(n))
+        }
+      }
+    } catch (e) {
+      if (e instanceof GitCommandError) return reply.code(404).send({ code: 'branch_not_found' })
+      throw e
+    }
   })
 }
