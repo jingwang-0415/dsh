@@ -105,4 +105,19 @@ describe('sync（真实 git fixture）', () => {
     expect(insertCommits(db, 'r', 'master', all)).toHaveLength(0) // 幂等
     db.close()
   })
+
+  it('listCommits 解析真实 rev-list 输出并与 git 真值一致', async () => {
+    const origin = createOriginRepo()
+    origin.commitFile('docs.txt', 'docs')
+    origin.commitFile('说明.txt', '中文内容')
+    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    await ensureMirror(origin.dir, mirrorDir)
+    const commits = await listCommits(mirrorDir, 'refs/heads/master')
+
+    expect(commits).toHaveLength(3) // fixture README + docs + 说明
+    expect(commits[0].sha).toBe(headSha(origin.dir)) // rev-list 新→旧：首条即 HEAD 真值
+    expect(commits[0].authorName).toBe('Tester')
+    expect(commits[0].subject).toBe('add 说明.txt') // 中文 subject 精确相等，锁多字节正文
+    expect(commits[0].committedAt).toBeGreaterThan(1_000_000_000)
+  })
 })
