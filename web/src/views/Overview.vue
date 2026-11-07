@@ -1,21 +1,27 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { api, connectEvents, formatFuture, formatRelative, type BranchRow, type StatusDto } from '../api'
+import { api, connectEvents, formatFuture, formatRelative, type BranchRow, type RepoDto, type StatusDto } from '../api'
 
 const router = useRouter()
 const status = ref<StatusDto | null>(null)
 const defaultBranch = ref('master')
 const branches = ref<BranchRow[]>([])
+const repos = ref<RepoDto[]>([])
+const repoId = ref('')
 const error = ref('')
 let es: EventSource | null = null
 
 async function refresh(): Promise<void> {
   try {
-    const [s, b, repos] = await Promise.all([api.status(), api.branches(), api.repos()])
+    const scope = repoId.value || undefined
+    const [s, b, rs] = await Promise.all([api.status(scope), api.branches(scope), api.repos()])
     status.value = s
     branches.value = b
-    defaultBranch.value = repos[0]?.defaultBranch ?? 'master'
+    repos.value = rs
+    const cur = rs.find(r => r.id === repoId.value) ?? rs[0]
+    defaultBranch.value = cur?.defaultBranch ?? 'master'
+    if (!repoId.value && cur) repoId.value = cur.id
     error.value = ''
   } catch (e) {
     error.value = (e as Error).message
@@ -29,6 +35,8 @@ onMounted(async () => {
     // refresh 内部已捕获并写入 error，此处兜底保证 SSE 仍建立
   }
   es = connectEvents({
+    // v1.1 SSE 载荷带 repoId（多仓）：本页只盯当前选中仓，repoId 值有意忽略——
+    // 其余仓的事件只会多触发一次幂等重拉，数据仍正确，不值得为省一次拉取引入过滤状态
     onCommitsNew: () => void refresh(),
     onBranchesUpdated: () => void refresh(),
     onStatus: s => {
@@ -63,6 +71,9 @@ function openCompare(b: BranchRow): void {
 
 <template>
   <section class="overview">
+    <div class="pick">
+      <label>仓库 <select v-model="repoId" @change="refresh"><option v-for="r in repos" :key="r.id" :value="r.id">{{ r.id }}</option></select></label>
+    </div>
     <div class="banner" :class="bannerClass()">{{ bannerText() }}</div>
     <p v-if="error" class="banner banner-red">加载失败：{{ error }}</p>
     <p v-if="status?.lastError" class="muted err">最近错误：{{ status.lastError }}</p>
