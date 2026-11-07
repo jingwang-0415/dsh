@@ -63,6 +63,11 @@ describe('CrossRepo 视图', () => {
   it('对比请求携带路径过滤与分支参数', async () => {
     const { fetchMock } = await mountView('?repoA=gh&repoB=gte&branchA=main&branchB=main&exclude=vendor%2F**')
     const called = (fetchMock as ReturnType<typeof vi.fn>).mock.calls.find((u: unknown[]) => String(u[0]).includes('/api/crossrepo/compare'))
-    expect(String(called![0])).toContain('exclude=vendor%2F**')
+    const url = String(called![0])
+    expect(url).toContain('repoA=gh')
+    expect(url).toContain('repoB=gte')
+    expect(url).toContain('branchA=main')
+    expect(url).toContain('branchB=main')
+    expect(url).toContain('exclude=vendor%2F**')
   })
 })
