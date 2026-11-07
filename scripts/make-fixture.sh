@@ -3,6 +3,9 @@
 # 创建一个带 master 与 release/1.0 的演示仓库，供监控站本地验收使用。
 set -euo pipefail
 DIR="${1:?用法: make-fixture.sh <目标目录>}"
+case "$DIR" in
+  /|"$HOME"|"$HOME"/|.|..) echo "拒绝危险目标目录: $DIR" >&2; exit 1 ;;
+esac
 rm -rf "$DIR"
 git init --initial-branch=master "$DIR"
 git -C "$DIR" config user.name "Demo"

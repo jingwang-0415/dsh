@@ -84,6 +84,7 @@ DSH 打包的 pnpm 没有内置 node-gyp（`dist/node_modules/node-gyp/bin/node-
 ```sh
 pnpm dlx node-gyp --version
 NODEGYP="$(ls -d "$HOME"/Library/pnpm/store/v11/links/@/node-gyp/*/p*-*/node_modules/node-gyp/bin/node-gyp.js | head -1)"
+: "${NODEGYP:?未找到 pnpm 内置 node-gyp，先执行第 2 步}"
 ```
 
 ### 3) 带 Electron headers 源码编译安装
