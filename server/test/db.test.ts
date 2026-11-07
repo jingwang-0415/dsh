@@ -22,4 +22,15 @@ describe('openDb', () => {
     expect(() => db.prepare(`INSERT INTO commits (repo_id, sha, committed_at, first_seen_at) VALUES ('r', 'abc', 2, 2)`).run()).toThrow(/UNIQUE/)
     db.close()
   })
+
+  it('重开幂等：同一路径重复 openDb 不抛错且迁移不重入', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'gsm-db-')), 'monitor.db')
+    const first = openDb(dbPath)
+    first.close()
+    const second = openDb(dbPath)
+    expect(second.pragma('user_version', { simple: true })).toBe(1)
+    const tables = (second.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as { name: string }[]).map(r => r.name)
+    for (const t of ['repos', 'branches', 'commits', 'fetch_events']) expect(tables).toContain(t)
+    second.close()
+  })
 })

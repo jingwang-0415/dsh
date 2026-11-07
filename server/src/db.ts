@@ -48,8 +48,10 @@ CREATE TABLE fetch_events (
 function migrate(db: Database.Database): void {
   const version = (db.pragma('user_version', { simple: true }) as number) ?? 0
   if (version < 1) {
-    db.exec(SCHEMA_V1)
-    db.pragma('user_version = 1')
+    db.transaction(() => {
+      db.exec(SCHEMA_V1)
+      db.pragma('user_version = 1')
+    })()
   }
 }
 
