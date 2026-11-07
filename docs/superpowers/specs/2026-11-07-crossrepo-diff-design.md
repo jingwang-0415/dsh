@@ -35,7 +35,7 @@
 3. 归并（纯函数 mergePatchMaps）:
    onlyInA  = A 中 patchId ∉ B指纹集 的提交（含元数据）
    onlyInB  = 对称
-   matched  = 交集 → [{patchId, shaA, shaB, subject}] 按 patchId 排序
+   matched  = 交集 → [{patchId, shaA, shaB, subject}] 按 A 侧提交时间倒序（git log 顺序）
 4. 提交元数据（subject/author/time）: git show -s --format='%H%x1f%an%x1f%ct%x1f%s' sha... 批量补齐
 5. 响应:
    { branchPair: {repoA, branchA, repoB, branchB},
@@ -45,7 +45,7 @@
      stats: { aTotal, bTotal, matched, onlyA, onlyB } }
 ```
 
-- unpairedBranches 单独提供：`GET /api/crossrepo/branches?repoA&repoB` → `{ repoA: BranchRow[], repoB: BranchRow[], paired: [name...] }`（供前端分支下拉与"未配对"提示）
+- 分支配对下拉：`GET /api/crossrepo/branches?repoA&repoB` → `{ repoA: { id, branches }, repoB: { id, branches }, paired, unpairedA, unpairedB }`（branches 为 active 分支名数组，ORDER BY name；compare 响应亦含 unpairedBranches，供前端"未配对"提示）
 
 ## 4. 多仓调度改造
 
@@ -59,7 +59,7 @@
 - 新视图 `/crossrepo`（导航"跨仓对比"）：
   - 仓库 A/B 下拉（来自 /api/repos）、分支 A/B 下拉（来自 /api/crossrepo/branches，未配对分支标记）
   - 路径过滤输入（排除框 + 仅对比框，逗号分隔 glob）
-  - 结果区：统计卡（A 独有/B 独有/已同步配对）+ 三组列表；matchedPairs 以灰色"疑似/源码一致"呈现并排显示 shaA↔shaB
+  - 结果区：统计行（A 独有/B 独有/已同步配对）+ 三组列表；matchedPairs 以灰色"疑似/源码一致"呈现并排显示 shaA↔shaB
 - Overview：仓库下拉选择器（切仓库刷新全部数据），其余不变
 - 样式复用既有 badge/rows 体系
 
