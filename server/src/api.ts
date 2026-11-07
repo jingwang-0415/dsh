@@ -195,8 +195,8 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
         split(q.include), split(q.exclude)
       )
       const [ba, bb] = [
-        (db.prepare(`SELECT name FROM branches WHERE repo_id=? AND status='active'`).all(ra.id) as { name: string }[]).map(x => x.name),
-        (db.prepare(`SELECT name FROM branches WHERE repo_id=? AND status='active'`).all(rb.id) as { name: string }[]).map(x => x.name)
+        (db.prepare(`SELECT name FROM branches WHERE repo_id=? AND status='active' ORDER BY name`).all(ra.id) as { name: string }[]).map(x => x.name),
+        (db.prepare(`SELECT name FROM branches WHERE repo_id=? AND status='active' ORDER BY name`).all(rb.id) as { name: string }[]).map(x => x.name)
       ]
       const paired = ba.filter(n => bb.includes(n))
       return {

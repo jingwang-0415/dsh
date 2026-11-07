@@ -40,9 +40,9 @@ onMounted(async () => {
     onCommitsNew: () => void refresh(),
     onBranchesUpdated: () => void refresh(),
     onStatus: s => {
-      // 初始 refresh 失败时 status 恒为 null，直接赋值守卫会把页面卡在“连接中…”：
-      // 此时借 SSE 推送触发一次重新拉取完成自愈
-      if (status.value) { status.value = s } else { void refresh() }
+      // 只认当前选中仓的 status 推送：其余仓的调度状态不覆写本页横幅；
+      // 初始 refresh 失败时 status 恒为 null，借 SSE 推送触发一次重新拉取完成自愈
+      if (status.value && s.repoId === repoId.value) { status.value = s } else { void refresh() }
     }
   })
 })

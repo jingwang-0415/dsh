@@ -74,6 +74,20 @@ describe('branchFingerprints（真实 git，独立双仓）', () => {
     expect(withVendor.length).toBe(withoutVendor.length + 1)
   })
 
+  it('include 过滤：include 模式外的改动不进指纹', async () => {
+    const origin = createOriginRepo('gsm-pe-')
+    // fixture commitFile 为裸 writeFileSync，子目录需先创建（探针实证：ENOENT）
+    mkdirSync(join(origin.dir, 'vendor'), { recursive: true })
+    const shaVendor = origin.commitFile('vendor/x.js', 'vendor-x')
+    mkdirSync(join(origin.dir, 'src'), { recursive: true })
+    const shaSrc = origin.commitFile('src/y.js', 'src-y')
+    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-pe-m-')), 'm.git')
+    await ensureMirror(origin.dir, mirrorDir)
+    const fps = await branchFingerprints(mirrorDir, 'master', buildPathspecs(['src/**'], []))
+    expect(fps.some(f => f.sha === shaSrc)).toBe(true)
+    expect(fps.some(f => f.sha === shaVendor)).toBe(false)
+  })
+
   it('runGit input 参数喂 stdin（真实 patch-id 管道）', async () => {
     const origin = createOriginRepo('gsm-pd-')
     const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-pd-m-')), 'm.git')

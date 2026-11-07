@@ -28,6 +28,15 @@ describe('loadConfig', () => {
   it('repos 为空时报错', () => {
     expect(() => loadConfig(writeConfig({ repos: [] }))).toThrow()
   })
+  it('双仓同 id 报 repo id 必须唯一', () => {
+    const dup = {
+      repos: [
+        { id: 'demo', url: 'ssh://git@example.com/a.git' },
+        { id: 'demo', url: 'ssh://git@example.com/b.git' }
+      ]
+    }
+    expect(() => loadConfig(writeConfig(dup))).toThrow(/repo id 必须唯一/)
+  })
 })
 
 describe('isBranchExcluded', () => {

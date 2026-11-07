@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createOriginRepo } from './fixture.js'
 import { buildApp } from '../src/app.js'
 import type { AppHandle } from '../src/app.js'
@@ -64,5 +64,24 @@ describe('多仓调度与 repo 作用域（真实 git）', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json().mirrorDir).toContain(join('repos', 'r2'))
     expect(res.json().repoId).toBe('r2')
+  })
+
+  it('SSE 三类事件载荷都带正确 repoId（commits.new/branches.updated/status.changed 契约）', async () => {
+    const publish = vi.spyOn(handle.sse, 'publish')
+    o2.git(['checkout', '-b', 'newfeat'])
+    // 内容与既有对象不同，规避同秒同内容提交 SHA 碰撞（仓库既定经验）
+    o2.commitFile('newfeat.txt', 'newfeat-content\n')
+    await handle.schedulers[1].runOnce()
+    const calls = publish.mock.calls
+    const commitsNew = calls.filter(([e]) => e === 'commits.new').map(([, d]) => d as { repoId: string; branch: string })
+    expect(commitsNew).toContainEqual(expect.objectContaining({ repoId: 'r2', branch: 'newfeat' }))
+    const branchesUpdated = calls.filter(([e]) => e === 'branches.updated').map(([, d]) => d as { repoId: string })
+    expect(branchesUpdated).toContainEqual(expect.objectContaining({ repoId: 'r2' }))
+    // status.changed 可能多次（running/idle），取 repoId==='r2' 且 state==='idle' 的记录断言
+    const statusIdle = calls.filter(
+      ([e, d]) => e === 'status.changed' && (d as { repoId?: string }).repoId === 'r2' && (d as { state?: string }).state === 'idle'
+    )
+    expect(statusIdle.length).toBeGreaterThan(0)
+    publish.mockRestore()
   })
 })

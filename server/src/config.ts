@@ -11,7 +11,11 @@ const repoSchema = z.object({
 })
 
 const configSchema = z.object({
-  repos: z.array(repoSchema).min(1),
+  // repo id 同时是 mirror 目录名/调度器标识/API ?repo= 取值，重复会让三方引用全部歧义
+  repos: z
+    .array(repoSchema)
+    .min(1)
+    .refine(repos => new Set(repos.map(r => r.id)).size === repos.length, { message: 'repo id 必须唯一' }),
   server: z
     .object({ host: z.string().min(1).default('127.0.0.1'), port: z.number().int().min(1).default(43900) })
     .default({})

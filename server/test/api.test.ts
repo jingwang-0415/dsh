@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -247,5 +247,22 @@ describe('跨仓对比 API（真实 git fixture，两仓独立历史）', () => 
     const badBranch = await handle.app.inject({ method: 'GET', url: '/api/crossrepo/compare?repoA=r1&repoB=r2&branchA=nope&branchB=master' })
     expect(badBranch.statusCode).toBe(404)
     expect(badBranch.json()).toMatchObject({ code: 'branch_not_found' })
+  })
+
+  it('crossrepo/compare exclude 生效：仅 vendor 改动的提交不进 onlyInA/onlyInB', async () => {
+    // fixture commitFile 为裸 writeFileSync，子目录需先创建（探针实证：ENOENT）
+    mkdirSync(join(o1.dir, 'vendor'), { recursive: true })
+    const shaA = o1.commitFile('vendor/v.txt', 'v-a')
+    mkdirSync(join(o2.dir, 'vendor'), { recursive: true })
+    const shaB = o2.commitFile('vendor/v.txt', 'v-b')
+    for (const s of handle.schedulers) await s.runOnce()
+    const res = await handle.app.inject({
+      method: 'GET',
+      url: '/api/crossrepo/compare?repoA=r1&repoB=r2&branchA=master&branchB=master&exclude=vendor%2F**'
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.onlyInA.map((c: { sha: string }) => c.sha)).not.toContain(shaA)
+    expect(body.onlyInB.map((c: { sha: string }) => c.sha)).not.toContain(shaB)
   })
 })
