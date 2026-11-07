@@ -1378,6 +1378,7 @@ describe('inclusionForCommit', () => {
     origin.commitFile('next.txt', 'n')                            // master 又前进
     origin.git(['checkout', '-b', 'cherry-side', 'master~2'])     // 基于 fixSha 之前的提交
     origin.git(['cherry-pick', fixSha])                           // cherry-pick → 新 sha
+    origin.git(['commit', '--amend', '--no-edit', '--date=2005-04-07T22:13:13 +0000'])  // cherry-pick 保留原 author 日期，同秒内会与 fixSha 字节相同；amend 改日期保证对象必异（Task 8 先例）
     origin.git(['checkout', 'master'])
 
     const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
