@@ -1,0 +1,42 @@
+import { runGit } from './gitRunner.js'
+import type { RefSnapshot } from './mirror.js'
+
+export type RawChange =
+  | { type: 'added'; branch: string; newSha: string }
+  | { type: 'updated'; branch: string; oldSha: string; newSha: string }
+  | { type: 'deleted'; branch: string; oldSha: string }
+
+export type RefChange =
+  | { type: 'added'; branch: string; newSha: string }
+  | { type: 'fast-forward'; branch: string; oldSha: string; newSha: string }
+  | { type: 'force-push'; branch: string; oldSha: string; newSha: string }
+  | { type: 'deleted'; branch: string; oldSha: string }
+
+export function diffRefs(before: RefSnapshot, after: RefSnapshot): RawChange[] {
+  const changes: RawChange[] = []
+  for (const [branch, newSha] of Object.entries(after)) {
+    const oldSha = before[branch]
+    if (!oldSha) changes.push({ type: 'added', branch, newSha })
+    else if (oldSha !== newSha) changes.push({ type: 'updated', branch, oldSha, newSha })
+  }
+  for (const [branch, oldSha] of Object.entries(before)) {
+    if (!(branch in after)) changes.push({ type: 'deleted', branch, oldSha })
+  }
+  return changes
+}
+
+export async function classifyChange(mirrorDir: string, change: RawChange): Promise<RefChange> {
+  if (change.type !== 'updated') return change
+  const ok = await runGit(mirrorDir, ['merge-base', '--is-ancestor', change.oldSha, change.newSha])
+    .then(() => true)
+    .catch(() => false)
+  return ok
+    ? { type: 'fast-forward', branch: change.branch, oldSha: change.oldSha, newSha: change.newSha }
+    : { type: 'force-push', branch: change.branch, oldSha: change.oldSha, newSha: change.newSha }
+}
+
+export async function classifyChanges(mirrorDir: string, changes: RawChange[]): Promise<RefChange[]> {
+  const out: RefChange[] = []
+  for (const c of changes) out.push(await classifyChange(mirrorDir, c))
+  return out
+}
