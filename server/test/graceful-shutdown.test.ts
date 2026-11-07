@@ -46,7 +46,7 @@ describe('优雅退出（存在 SSE 连接）', () => {
       ])
     } catch (e) {
       // 失败兜底清理（限时），避免悬挂句柄污染测试进程
-      handle.scheduler.stop()
+      handle.schedulers[0].stop()
       handle.sse.closeAll()
       const bounded = new Promise<void>(resolve => setTimeout(resolve, 1_000).unref())
       await Promise.race([handle.app.close().then(() => {}, () => {}), bounded])

@@ -5,8 +5,8 @@ import { buildApp } from './app.js'
 const configPath = process.env.GSM_CONFIG ?? join(homedir(), '.git-sync-monitor', 'config.json')
 const dataDir = process.env.GSM_DATA ?? join(homedir(), '.git-sync-monitor')
 
-const { app, config, scheduler, close } = await buildApp({ configPath, dataDir })
-scheduler.start()
+const { app, config, schedulers, close } = await buildApp({ configPath, dataDir })
+schedulers.forEach(s => s.start())
 await app.listen({ host: config.server.host, port: config.server.port })
 console.log(`git-sync-monitor 已启动: http://${config.server.host}:${config.server.port}`)
 

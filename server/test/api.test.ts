@@ -25,7 +25,7 @@ describe('API 集成（真实 git fixture）', () => {
       },
       dataDir: mkdtempSync(join(tmpdir(), 'gsm-data-'))
     })
-    await handle.scheduler.runOnce()   // 首轮回填
+    await handle.schedulers[0].runOnce()   // 首轮回填
   })
 
   afterAll(async () => { await handle.close() })
@@ -179,7 +179,7 @@ describe('API 集成（真实 git fixture）', () => {
   it('GET /api/commits/:sha/inclusion 未包含在前且状态正确', async () => {
     // fixture：release/1.0 自 fixSha 提交之前的 master 分出 → 不包含 fixSha；master 包含
     origin.commitFile('next.txt', 'n')                     // master 新提交
-    await handle.scheduler.runOnce()
+    await handle.schedulers[0].runOnce()
     const res = await handle.app.inject({ method: 'GET', url: `/api/commits/${fixSha}/inclusion` })
     expect(res.statusCode).toBe(200)
     const body = res.json()
