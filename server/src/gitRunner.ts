@@ -14,15 +14,17 @@ export async function runGit(cwd: string, args: string[], opts: RunGitOptions = 
   const { timeoutMs = 60_000, bin = 'git' } = opts
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = ''
-    let stderr = ''
+    const stdoutChunks: Buffer[] = []
+    const stderrChunks: Buffer[] = []
     let timedOut = false
     const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL') }, timeoutMs)
-    child.stdout!.on('data', (d: Buffer) => { stdout += d })
-    child.stderr!.on('data', (d: Buffer) => { stderr += d })
+    child.stdout!.on('data', (d: Buffer) => { stdoutChunks.push(d) })
+    child.stderr!.on('data', (d: Buffer) => { stderrChunks.push(d) })
     child.on('error', err => { clearTimeout(timer); reject(err) })
     child.on('close', code => {
       clearTimeout(timer)
+      const stdout = Buffer.concat(stdoutChunks).toString('utf8')
+      const stderr = Buffer.concat(stderrChunks).toString('utf8')
       if (timedOut) reject(new Error(`${bin} ${args.join(' ')} 超时 (${timeoutMs}ms)`))
       else if (code === 0) resolve({ stdout, stderr })
       else reject(new GitCommandError(args, code, stderr))
