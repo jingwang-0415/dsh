@@ -32,3 +32,15 @@
 - cherry-pick ≠ 包含（SHA 祖先判定），如如实标注；patch-id 疑似匹配是 v1.1 的增强不是修正
 - first_seen_at 24h 红徽标随时间过期，不依赖已读状态
 - behindDefault = defaultBranch 独有提交数（analyzer base 视角），api.ts:69 取 .ahead 正确
+
+## v1.1 执行后新增 carry（最终 scoped 审查裁定）
+
+- vue-tsc 类型门（v1.2 第一件事；StatusChangedEvent 失真、api.test 旧形状 SSE fixture 均因无门无人察觉）
+- Compare 视图 repo 作用域成套接通 + Overview 徽标跳转带 repo + 跨仓行 CommitDetail 直链（detail API 需 repo 作用域先行）——v1.2 成套做
+- showCommits 分批（ARG_MAX）+ git log -p 补丁文本流式化（大仓化）
+- SSE 心跳 25s comment ping；spec §8 503/since 回写
+- multirepo.test publish.mockRestore 移入 afterEach（当前为文件末位测试无泄漏面）
+
+## v1.1 裁定存档（摘要）
+
+- patch-id 空匹配=合法空集；同秒 SHA 碰撞先例贯穿 v1.1 三处测试；include 行为测试与 HTTP→引擎缝断言 uplift 合并前必修（已完成）；matchedPairs 排序回写 spec（时间倒序）；文档字面三处回写随修复批落地
