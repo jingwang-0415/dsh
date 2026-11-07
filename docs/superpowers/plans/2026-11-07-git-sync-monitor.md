@@ -533,6 +533,14 @@ describe('runGit', () => {
   it('超时 kill 并报超时错误', async () => {
     await expect(runGit('.', ['5'], { timeoutMs: 100, bin: 'sleep' })).rejects.toThrow(/超时/)
   })
+
+  it('大体积 CJK 输出在分块边界不损坏（Buffer 拼接后解码）', async () => {
+    const bigFile = join(mkdtempSync(join(tmpdir(), 'gsm-cjk-')), 'big.txt')
+    const content = Array.from({ length: 20_000 }, (_, i) => `第${i}行：中文提交主题测试，多字节UTF8。`).join('\n')
+    writeFileSync(bigFile, content, 'utf8')
+    const r = await runGit('.', [bigFile], { bin: 'cat' })
+    expect(r.stdout).toBe(content)
+  })
 })
 ```
 
@@ -560,15 +568,18 @@ export async function runGit(cwd: string, args: string[], opts: RunGitOptions = 
   const { timeoutMs = 60_000, bin = 'git' } = opts
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = ''
-    let stderr = ''
+    const stdoutChunks: Buffer[] = []
+    const stderrChunks: Buffer[] = []
     let timedOut = false
     const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL') }, timeoutMs)
-    child.stdout!.on('data', (d: Buffer) => { stdout += d })
-    child.stderr!.on('data', (d: Buffer) => { stderr += d })
+    child.stdout!.on('data', (d: Buffer) => { stdoutChunks.push(d) })
+    child.stderr!.on('data', (d: Buffer) => { stderrChunks.push(d) })
     child.on('error', err => { clearTimeout(timer); reject(err) })
     child.on('close', code => {
       clearTimeout(timer)
+      // 先拼 Buffer 再解码：避免多字节 UTF-8 在管道分块边界被截断损坏
+      const stdout = Buffer.concat(stdoutChunks).toString('utf8')
+      const stderr = Buffer.concat(stderrChunks).toString('utf8')
       if (timedOut) reject(new Error(`${bin} ${args.join(' ')} 超时 (${timeoutMs}ms)`))
       else if (code === 0) resolve({ stdout, stderr })
       else reject(new GitCommandError(args, code, stderr))
