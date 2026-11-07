@@ -44,19 +44,26 @@ export class Scheduler {
     consecutiveFailures: 0, lastError: null, lastNewCommits: null
   }
   private timer: NodeJS.Timeout | null = null
+  private stopped = false
   running = false
 
   constructor(private deps: SchedulerDeps) {}
 
-  start(): void { void this.loop() }
+  start(): void {
+    this.stopped = false
+    void this.loop()
+  }
 
   stop(): void {
+    this.stopped = true
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
   }
 
   private async loop(): Promise<void> {
+    if (this.stopped) return                      // stop 后早退：不执行、不排程
     await this.runOnce()
+    if (this.stopped) return                      // 一轮跑完时已被 stop：不再排程下一轮
     const delay = this.status.consecutiveFailures > 0
       ? nextBackoffMs(this.status.consecutiveFailures)
       : this.deps.repo.pollIntervalSeconds * 1000
@@ -76,11 +83,12 @@ export class Scheduler {
 
   async runOnce(): Promise<RunOnceResult> {
     if (this.running) return { skipped: true }
-    this.running = true
-    this.setStatus({ ...this.status, state: 'running' })
     const { db, repo, mirrorDir } = this.deps
-    const eventId = startFetchEvent(db, repo.id)
+    let eventId: number | null = null
     try {
+      this.running = true
+      this.setStatus({ ...this.status, state: 'running' })
+      eventId = startFetchEvent(db, repo.id)
       await ensureMirror(repo.url, mirrorDir)
       const before = await snapshotRefs(mirrorDir)
       await fetchMirror(mirrorDir)
@@ -113,13 +121,24 @@ export class Scheduler {
       })
       return { skipped: false, newCommits }
     } catch (e) {
+      // catch 体内任何一步再失败都只记录、不外抛，避免 unhandledRejection / 互斥卡死
       const msg = (e as Error).message
-      if (CORRUPT_RE.test(msg)) rmSync(mirrorDir, { recursive: true, force: true })  // 下一轮自动重克隆
-      finishFetchEvent(db, eventId, 'failed', 0, msg)
-      this.setStatus({
-        ...this.status, state: 'backoff', lastRunAt: Date.now(),
-        consecutiveFailures: this.status.consecutiveFailures + 1, lastError: msg
-      })
+      if (CORRUPT_RE.test(msg)) {
+        try {
+          rmSync(mirrorDir, { recursive: true, force: true })  // 下一轮自动重克隆
+        } catch (rmErr) { console.error('scheduler: 删除损坏镜像目录失败', rmErr) }
+      }
+      if (eventId !== null) {
+        try {
+          finishFetchEvent(db, eventId, 'failed', 0, msg)
+        } catch (dbErr) { console.error('scheduler: 写入 fetch_events 失败', dbErr) }
+      }
+      try {
+        this.setStatus({
+          ...this.status, state: 'backoff', lastRunAt: Date.now(),
+          consecutiveFailures: this.status.consecutiveFailures + 1, lastError: msg
+        })
+      } catch (stErr) { console.error('scheduler: onStatus 回调失败', stErr) }
       return { skipped: false, error: msg }
     } finally {
       this.running = false

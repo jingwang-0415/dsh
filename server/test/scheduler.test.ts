@@ -82,7 +82,7 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
     const r = await s.runOnce()
     expect('error' in r).toBe(true)
     expect(s.status.consecutiveFailures).toBe(1)
-    expect(['backoff', 'error']).toContain(s.status.state)
+    expect(s.status.state).toBe('backoff')
     const ev = db.prepare(`SELECT status, error FROM fetch_events ORDER BY id DESC LIMIT 1`).get() as { status: string; error: string | null }
     expect(ev.status).toBe('failed')
     expect(ev.error).not.toBeNull()
@@ -115,6 +115,41 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
     expect(r.skipped).toBe(true)
     // @ts-expect-error 恢复
     s.running = false
+    db.close()
+  })
+
+  it('stop 后 loop 早退：不产生 fetch_events 也不触发 onStatus', async () => {
+    const origin = createOriginRepo()
+    const db = setupDb()
+    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const { s, onStatus } = makeScheduler(db, origin.dir, mirrorDir)
+    s.stop()
+    await (s as any).loop()
+    const n = db.prepare(`SELECT COUNT(*) AS n FROM fetch_events`).get() as { n: number }
+    expect(n.n).toBe(0)
+    expect(onStatus).not.toHaveBeenCalled()
+    s.stop()   // 清理：若实现已排程 timer 则清除
+    db.close()
+  })
+
+  it('onStatus 抛错不 reject 且不卡死互斥', async () => {
+    const origin = createOriginRepo()
+    const db = setupDb()
+    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const onCommitsNew = vi.fn()
+    const onBranchesUpdated = vi.fn()
+    const onStatus = vi.fn(() => { throw new Error('socket destroyed') })
+    const s = new Scheduler({
+      db,
+      repo: { id: 'r', url: origin.dir, defaultBranch: 'master', branchExclude: [], pollIntervalSeconds: 30 },
+      mirrorDir,
+      handlers: { onCommitsNew, onBranchesUpdated, onStatus }
+    })
+    const r = await s.runOnce()          // 应 fulfilled：catch 内故障被兜底，不外抛
+    expect('error' in r).toBe(true)
+    expect(r.skipped).toBe(false)
+    const r2 = await s.runOnce()         // running 已被 finally 释放 → 不得 skipped
+    expect(r2.skipped).toBe(false)
     db.close()
   })
 })
