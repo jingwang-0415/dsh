@@ -2,6 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import Database from 'better-sqlite3'
 import { createOriginRepo } from './fixture.js'
 import { buildApp } from '../src/app.js'
 import type { AppHandle } from '../src/app.js'
@@ -57,6 +58,73 @@ describe('API 集成（真实 git fixture）', () => {
     const res = await handle.app.inject({ method: 'GET', url: '/api/commits?branch=master&limit=10' })
     expect(res.statusCode).toBe(200)
     expect(res.json()).toHaveLength(2)  // fixture README + fix.txt
+  })
+
+  it('GET /api/commits limit=abc 返回 400（NaN 会绕过 --max-count 触发全量 rev-list）', async () => {
+    const res = await handle.app.inject({ method: 'GET', url: '/api/commits?branch=master&limit=abc' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'bad_request' })
+  })
+
+  it('GET /api/commits limit=0 返回 400（无界 rev-list 防线）', async () => {
+    const res = await handle.app.inject({ method: 'GET', url: '/api/commits?branch=master&limit=0' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'bad_request' })
+  })
+
+  it('GET /api/commits limit=-1 返回 400（不再伪装成 404）', async () => {
+    const res = await handle.app.inject({ method: 'GET', url: '/api/commits?branch=master&limit=-1' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'bad_request' })
+  })
+
+  it('GET /api/commits limit=1 返回 200 且恰 1 行', async () => {
+    const res = await handle.app.inject({ method: 'GET', url: '/api/commits?branch=master&limit=1' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toHaveLength(1)
+  })
+
+  it('GET /api/commits 非法 offset 返回 400，合法 offset 生效', async () => {
+    const bad = await handle.app.inject({ method: 'GET', url: '/api/commits?branch=master&offset=abc' })
+    expect(bad.statusCode).toBe(400)
+    const neg = await handle.app.inject({ method: 'GET', url: '/api/commits?branch=master&offset=-1' })
+    expect(neg.statusCode).toBe(400)
+    const ok = await handle.app.inject({ method: 'GET', url: '/api/commits?branch=master&offset=1&limit=1' })
+    expect(ok.statusCode).toBe(200)
+    expect(ok.json()).toHaveLength(1)
+  })
+
+  it('buildApp 幂等登记 repos：同 id 改 URL 走 upsert 且 created_at 保留', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'gsm-upsert-'))
+    const mkHandle = (url: string): Promise<AppHandle> => buildApp({
+      configOverride: {
+        repos: [{ id: 'upsert-demo', url, defaultBranch: 'master', branchExclude: [], pollIntervalSeconds: 30 }],
+        server: { host: '127.0.0.1', port: 0 }
+      },
+      dataDir
+    })
+    const readRow = (): { url: string; default_branch: string | null; created_at: number } => {
+      const db = new Database(join(dataDir, 'monitor.db'), { readonly: true })
+      try {
+        return db.prepare(`SELECT url, default_branch, created_at FROM repos WHERE id='upsert-demo'`).get() as
+          { url: string; default_branch: string | null; created_at: number }
+      } finally { db.close() }
+    }
+    const h1 = await mkHandle(origin.dir)
+    let firstCreatedAt = 0
+    try {
+      const first = readRow()
+      expect(first.url).toBe(origin.dir)
+      firstCreatedAt = first.created_at
+      await new Promise(r => setTimeout(r, 5))   // 保证两次 Date.now() 可区分
+    } finally { await h1.close() }
+    const h2 = await mkHandle('/tmp/changed-url.git')
+    try {
+      const second = readRow()
+      expect(second.url).toBe('/tmp/changed-url.git')   // 同 id 改 URL 被更新
+      expect(second.default_branch).toBe('master')
+      expect(second.created_at).toBe(firstCreatedAt)    // created_at 保留原值
+    } finally { await h2.close() }
   })
 
   it('GET /api/compare 返回 ahead/behind 与独有提交', async () => {

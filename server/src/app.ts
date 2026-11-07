@@ -35,9 +35,12 @@ export async function buildApp(options: AppOptions = {}): Promise<AppHandle> {
   const sse: SseHub = createSseHub()
   const repo = config.repos[0]
   // repos 表是 fetch_events/branches/commits 外键的宿主（openDb 开启 foreign_keys），
-  // 装配时幂等登记，否则调度器首跑即因 FK 约束失败
-  db.prepare(`INSERT OR IGNORE INTO repos (id, url, created_at) VALUES (?,?,?)`)
-    .run(repo.id, repo.url, Date.now())
+  // 装配时幂等登记，否则调度器首跑即因 FK 约束失败；
+  // 同 id 改 URL 时 upsert 更新 url/default_branch，created_at 保留原值
+  db.prepare(
+    `INSERT INTO repos (id, url, default_branch, created_at) VALUES (?,?,?,?)
+     ON CONFLICT(id) DO UPDATE SET url=excluded.url, default_branch=excluded.default_branch`
+  ).run(repo.id, repo.url, repo.defaultBranch, Date.now())
 
   const scheduler = new Scheduler({
     db, repo, mirrorDir: mirrorDirFor(repo.id),
@@ -66,6 +69,9 @@ export async function buildApp(options: AppOptions = {}): Promise<AppHandle> {
 
   const close = async (): Promise<void> => {
     scheduler.stop()
+    // hijack 的 SSE 流对 Fastify 非 idle，app.close() 只清 idle 连接会永久悬挂；
+    // 先同步销毁全部 SSE 客户端再走正常关闭
+    sse.closeAll()
     await app.close()
     db.close()
   }

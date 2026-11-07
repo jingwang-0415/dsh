@@ -85,9 +85,16 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
   app.get('/api/commits', async (req, reply) => {
     const q = req.query as { branch?: string; limit?: string; offset?: string }
     if (!q.branch) return reply.code(400).send({ code: 'bad_request', message: '缺少 branch 参数' })
+    // 非法分页参数若放行，NaN 会绕过 --max-count 触发整分支全量 rev-list（可反复打满 CPU），
+    // 负数/浮点则让 git 报错伪装成 404；这里统一前置校验
+    const limit = q.limit === undefined ? 50 : Number(q.limit)
+    const offset = q.offset === undefined ? 0 : Number(q.offset)
+    if (!Number.isInteger(limit) || limit < 1 || !Number.isInteger(offset) || offset < 0) {
+      return reply.code(400).send({ code: 'bad_request', message: 'limit/offset 需为整数（limit≥1，offset≥0）' })
+    }
     try {
       const commits = await listCommits(mirrorDir, `refs/heads/${q.branch}`, {
-        maxCount: Number(q.limit ?? 50), skip: Number(q.offset ?? 0)
+        maxCount: limit, skip: offset
       })
       return commits.map(c => mapCommit(toDbRowShape(c)))
     } catch (e) {

@@ -1,7 +1,7 @@
 import { rmSync } from 'node:fs'
 import type Database from 'better-sqlite3'
 import { isBranchExcluded, type RepoConfig } from './config.js'
-import { ensureMirror, fetchMirror, snapshotRefs } from './mirror.js'
+import { ensureMirror, fetchMirror, snapshotRefs, type RefSnapshot } from './mirror.js'
 import { diffRefs, classifyChanges } from './refDiff.js'
 import { applyChanges, backfillRepo, finishFetchEvent, startFetchEvent } from './sync.js'
 import type { CommitInfo } from './parse.js'
@@ -68,12 +68,25 @@ export class Scheduler {
       ? nextBackoffMs(this.status.consecutiveFailures)
       : this.deps.repo.pollIntervalSeconds * 1000
     this.timer = setTimeout(() => void this.loop(), delay)
-    this.setStatus({ ...this.status, nextRunAt: Date.now() + delay })
+    try {
+      // onStatus 已真挂 SSE（app.ts）：回调抛错不得经 void this.loop() 变 unhandledRejection，
+      // 也不得影响上面已排程的 timer
+      this.setStatus({ ...this.status, nextRunAt: Date.now() + delay })
+    } catch (e) { console.error('scheduler: loop 状态回调失败', e) }
   }
 
   private branchCount(): number {
     return (this.deps.db.prepare(`SELECT COUNT(*) AS n FROM branches WHERE repo_id=?`)
       .get(this.deps.repo.id) as { n: number }).n
+  }
+
+  /** 以镜像快照全量回填（过滤 excluded）；INSERT OR IGNORE 保证幂等，不产生新提交事件 */
+  private async backfillFromSnapshot(snapshot: RefSnapshot): Promise<number> {
+    const { db, repo, mirrorDir } = this.deps
+    const heads = Object.entries(snapshot)
+      .filter(([b]) => !isBranchExcluded(b, repo.branchExclude))
+      .map(([branch, sha]) => ({ branch, sha }))
+    return backfillRepo(db, repo.id, mirrorDir, heads)
   }
 
   private setStatus(s: SchedulerStatus): void {
@@ -89,7 +102,7 @@ export class Scheduler {
       this.running = true
       this.setStatus({ ...this.status, state: 'running' })
       eventId = startFetchEvent(db, repo.id)
-      await ensureMirror(repo.url, mirrorDir)
+      const mirrorState = await ensureMirror(repo.url, mirrorDir)
       const before = await snapshotRefs(mirrorDir)
       await fetchMirror(mirrorDir)
       const after = await snapshotRefs(mirrorDir)
@@ -97,10 +110,12 @@ export class Scheduler {
       let newCommits = 0
       if (this.branchCount() === 0) {
         // 设计文档 §5.4：首次全量回填，不产生新提交事件
-        const heads = Object.entries(after)
-          .filter(([b]) => !isBranchExcluded(b, repo.branchExclude))
-          .map(([branch, sha]) => ({ branch, sha }))
-        newCommits = await backfillRepo(db, repo.id, mirrorDir, heads)
+        newCommits = await this.backfillFromSnapshot(after)
+      } else if (mirrorState === 'cloned') {
+        // spec §11：镜像损坏自愈会重克隆，重克隆后 before===after（diff 恒空），
+        // 若不回填，损坏窗口期间的上游新分支/新提交将永久缺失。
+        // 这里以克隆后快照做全量回填（INSERT OR IGNORE 幂等，不产生新提交事件）
+        newCommits = await this.backfillFromSnapshot(after)
       } else {
         const raw = diffRefs(before, after)
           .filter(c => !isBranchExcluded(c.branch, repo.branchExclude))

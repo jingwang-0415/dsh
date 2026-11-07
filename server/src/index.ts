@@ -11,5 +11,11 @@ await app.listen({ host: config.server.host, port: config.server.port })
 console.log(`git-sync-monitor 已启动: http://${config.server.host}:${config.server.port}`)
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(sig, () => { void close().then(() => process.exit(0)) })
+  // close 失败不能静默吞掉（进程以 0 退出会骗过进程管理器）：记录并以非零退出
+  process.on(sig, () => {
+    close().then(() => process.exit(0)).catch(err => {
+      console.error('优雅退出失败', err)
+      process.exit(1)
+    })
+  })
 }

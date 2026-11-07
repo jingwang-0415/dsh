@@ -31,7 +31,11 @@ onMounted(async () => {
   es = connectEvents({
     onCommitsNew: () => void refresh(),
     onBranchesUpdated: () => void refresh(),
-    onStatus: s => { if (status.value) status.value = s }
+    onStatus: s => {
+      // 初始 refresh 失败时 status 恒为 null，直接赋值守卫会把页面卡在“连接中…”：
+      // 此时借 SSE 推送触发一次重新拉取完成自愈
+      if (status.value) { status.value = s } else { void refresh() }
+    }
   })
 })
 onUnmounted(() => { es?.close() })

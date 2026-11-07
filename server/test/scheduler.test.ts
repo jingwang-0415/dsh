@@ -29,6 +29,9 @@ function setupDb(): Database.Database {
   db.prepare(`INSERT INTO repos (id, url, created_at) VALUES ('r', 'x', 1)`).run()
   return db
 }
+function countRows(db: Database.Database, table: 'branches' | 'commits'): number {
+  return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+}
 
 describe('nextBackoffMs', () => {
   it('指数退避并封顶 5 分钟', () => {
@@ -89,18 +92,53 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
     db.close()
   })
 
-  it('镜像损坏后自愈（重克隆）', async () => {
+  it('镜像损坏后自愈：重克隆并按 spec §11 全量回填（幂等无重复）', async () => {
     const origin = createOriginRepo()
     const db = setupDb()
     const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
     const { s } = makeScheduler(db, origin.dir, mirrorDir)
     await s.runOnce()
+    const baseBranches = countRows(db, 'branches')
+    const baseCommits = countRows(db, 'commits')
 
     rmSync(join(mirrorDir, 'HEAD'))   // 破坏镜像
-    await s.runOnce()                  // 失败并删除镜像
-    const r = await s.runOnce()        // 重克隆 + 空差异，不再回填（branches 已有行）
+    await s.runOnce()                 // 失败并删除镜像
+    const r = await s.runOnce()       // 重克隆 → spec §11：必须全量回填，而非依赖恒空的 diff
     expect('error' in r).toBe(false)
     expect(s.status.state).toBe('idle')
+    expect(countRows(db, 'branches')).toBe(baseBranches)
+    expect(countRows(db, 'commits')).toBe(baseCommits)
+    const dup = db.prepare(`SELECT COUNT(*) AS n FROM (SELECT sha FROM commits GROUP BY sha HAVING COUNT(*) > 1)`).get() as { n: number }
+    expect(dup.n).toBe(0)
+    db.close()
+  })
+
+  it('损坏窗口期间上游新增分支：重克隆后回填补齐（spec §11）', async () => {
+    const origin = createOriginRepo()
+    const db = setupDb()
+    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const { s } = makeScheduler(db, origin.dir, mirrorDir)
+    await s.runOnce()
+    expect(countRows(db, 'branches')).toBe(1)
+
+    rmSync(join(mirrorDir, 'HEAD'))                    // 破坏镜像
+    origin.git(['checkout', '-b', 'feature/late'])     // 损坏窗口期间上游新增分支与提交
+    const lateSha = origin.commitFile('late.txt', 'L')
+    origin.git(['checkout', 'master'])
+    await s.runOnce()                                  // 失败并删除镜像
+    const r = await s.runOnce()                        // 重克隆 → 全量回填补齐窗口期数据
+    expect('error' in r).toBe(false)
+    expect('newCommits' in r && r.newCommits).toBe(1)  // 仅窗口期的 late 提交为新增
+
+    const names = (db.prepare(`SELECT name FROM branches WHERE repo_id='r' ORDER BY name`).all() as { name: string }[])
+      .map(b => b.name)
+    expect(names).toEqual(['feature/late', 'master'])
+    const late = db.prepare(`SELECT head_sha, status FROM branches WHERE repo_id='r' AND name='feature/late'`).get() as { head_sha: string; status: string }
+    expect(late.head_sha).toBe(lateSha)
+    expect(late.status).toBe('active')
+    expect(countRows(db, 'commits')).toBe(2)           // 基线 README（幂等忽略）+ late
+    const dup = db.prepare(`SELECT COUNT(*) AS n FROM (SELECT sha FROM commits GROUP BY sha HAVING COUNT(*) > 1)`).get() as { n: number }
+    expect(dup.n).toBe(0)
     db.close()
   })
 
@@ -129,6 +167,25 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
     expect(n.n).toBe(0)
     expect(onStatus).not.toHaveBeenCalled()
     s.stop()   // 清理：若实现已排程 timer 则清除
+    db.close()
+  })
+
+  it('loop 内 onStatus 抛错不 reject 且 timer 已排程', async () => {
+    const origin = createOriginRepo()
+    const db = setupDb()
+    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const onStatus = vi.fn(() => { throw new Error('socket destroyed') })
+    const s = new Scheduler({
+      db,
+      repo: { id: 'r', url: origin.dir, defaultBranch: 'master', branchExclude: [], pollIntervalSeconds: 30 },
+      mirrorDir,
+      handlers: { onCommitsNew: vi.fn(), onBranchesUpdated: vi.fn(), onStatus }
+    })
+    // 修复前：loop 尾部 setStatus 抛错经 void this.loop() 变 unhandledRejection
+    await expect((s as unknown as { loop(): Promise<void> }).loop()).resolves.toBeUndefined()
+    expect(onStatus).toHaveBeenCalled()
+    expect(s.status.nextRunAt).not.toBeNull()   // 已排程的 timer 不受回调失败影响
+    s.stop()   // 清理排程的 timer
     db.close()
   })
 
