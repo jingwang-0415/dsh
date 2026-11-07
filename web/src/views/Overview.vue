@@ -1,23 +1,33 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { api, connectEvents, formatRelative, type BranchRow, type StatusDto } from '../api'
+import { api, connectEvents, formatFuture, formatRelative, type BranchRow, type StatusDto } from '../api'
 
 const router = useRouter()
 const status = ref<StatusDto | null>(null)
 const defaultBranch = ref('master')
 const branches = ref<BranchRow[]>([])
+const error = ref('')
 let es: EventSource | null = null
 
 async function refresh(): Promise<void> {
-  const [s, b, repos] = await Promise.all([api.status(), api.branches(), api.repos()])
-  status.value = s
-  branches.value = b
-  defaultBranch.value = repos[0]?.defaultBranch ?? 'master'
+  try {
+    const [s, b, repos] = await Promise.all([api.status(), api.branches(), api.repos()])
+    status.value = s
+    branches.value = b
+    defaultBranch.value = repos[0]?.defaultBranch ?? 'master'
+    error.value = ''
+  } catch (e) {
+    error.value = (e as Error).message
+  }
 }
 
 onMounted(async () => {
-  await refresh()
+  try {
+    await refresh()
+  } catch {
+    // refresh 内部已捕获并写入 error，此处兜底保证 SSE 仍建立
+  }
   es = connectEvents({
     onCommitsNew: () => void refresh(),
     onBranchesUpdated: () => void refresh(),
@@ -39,7 +49,7 @@ function bannerClass(): string {
 function bannerText(): string {
   const s = status.value
   if (!s) return '连接中…'
-  if (s.consecutiveFailures > 0) return `监听重试中（第 ${s.consecutiveFailures} 次失败），下次重试 ${s.nextRunAt ? formatRelative(s.nextRunAt) : '稍后'}`
+  if (s.consecutiveFailures > 0) return `监听重试中（第 ${s.consecutiveFailures} 次失败），下次重试 ${s.nextRunAt ? formatFuture(s.nextRunAt) : '稍后'}`
   return `监听正常 · 上次同步 ${s.lastRunAt ? formatRelative(s.lastRunAt) : '从未'}`
 }
 function openCompare(b: BranchRow): void {
@@ -50,6 +60,7 @@ function openCompare(b: BranchRow): void {
 <template>
   <section class="overview">
     <div class="banner" :class="bannerClass()">{{ bannerText() }}</div>
+    <p v-if="error" class="banner banner-red">加载失败：{{ error }}</p>
     <p v-if="status?.lastError" class="muted err">最近错误：{{ status.lastError }}</p>
 
     <table class="tbl">

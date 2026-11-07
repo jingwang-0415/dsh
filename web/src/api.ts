@@ -71,6 +71,19 @@ export function formatRelative(ts: number, now = Date.now()): string {
   return `${Math.floor(hours / 24)} 天前`
 }
 
+// 与 formatRelative 对偶：面向未来时间戳（如调度器 nextRunAt 倒计时）
+export function formatFuture(ts: number, now = Date.now()): string {
+  const diff = Math.max(0, ts - now)
+  const seconds = Math.floor(diff / 1000)
+  if (seconds < 1) return '刚刚'
+  if (seconds < 60) return `${seconds} 秒后`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟后`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时后`
+  return '稍后'
+}
+
 export interface EventHandlers {
   onCommitsNew?: (data: { branch: string; count: number; subjects: string[] }) => void
   onBranchesUpdated?: () => void

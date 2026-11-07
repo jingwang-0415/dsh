@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { connectEvents, formatRelative } from '../src/api.js'
+import { connectEvents, formatFuture, formatRelative } from '../src/api.js'
 
 describe('formatRelative', () => {
   const now = 1_700_000_000_000
@@ -8,6 +8,17 @@ describe('formatRelative', () => {
     expect(formatRelative(now - 5 * 60_000, now)).toBe('5 分钟前')
     expect(formatRelative(now - 3 * 3600_000, now)).toBe('3 小时前')
     expect(formatRelative(now - 2 * 86_400_000, now)).toBe('2 天前')
+  })
+})
+
+describe('formatFuture', () => {
+  const now = 1_700_000_000_000
+  it('未来时间分级，过去时间戳回退刚刚', () => {
+    expect(formatFuture(now + 30_000, now)).toBe('30 秒后')
+    expect(formatFuture(now + 5 * 60_000, now)).toBe('5 分钟后')
+    expect(formatFuture(now + 3 * 3600_000, now)).toBe('3 小时后')
+    expect(formatFuture(now + 2 * 86_400_000, now)).toBe('稍后')
+    expect(formatFuture(now - 10_000, now)).toBe('刚刚')
   })
 })
 
