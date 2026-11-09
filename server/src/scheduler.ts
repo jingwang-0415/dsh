@@ -49,6 +49,11 @@ export class Scheduler {
 
   constructor(private deps: SchedulerDeps) {}
 
+  /** 只读访问 repo id：API 侧 removeScheduler 按此定位，不外泄可变 deps */
+  get repoId(): string {
+    return this.deps.repo.id
+  }
+
   start(): void {
     this.stopped = false
     void this.loop()

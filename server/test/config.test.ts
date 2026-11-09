@@ -40,6 +40,13 @@ describe('loadConfig', () => {
     }
     expect(() => loadConfig(writeConfig(dup))).toThrow(/repo id 必须唯一/)
   })
+  it('repo id 越白名单（../ 逃逸、空格）报错并含白名单文案', () => {
+    // id 同时是 mirror 目录名：../demo 会逃出 repos/ 根目录
+    for (const id of ['../demo', 'a b']) {
+      expect(() => loadConfig(writeConfig({ repos: [{ id, url: 'ssh://git@example.com/demo.git' }] })))
+        .toThrow(/id 仅允许字母数字与 \. _ -/)
+    }
+  })
 })
 
 describe('isBranchExcluded', () => {
