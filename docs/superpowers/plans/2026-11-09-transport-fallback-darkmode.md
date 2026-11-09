@@ -109,3 +109,14 @@ README.md                 [改] 传输兜底用法段
 |---------|------|
 | git clone 不可达（内源代理劫持）但网络可达的兜底 | T1（后端 bypass/proxy 传输层）+ T2（UI 入口）|
 | 深色模式按钮对比度低无法看清 | T3 |
+
+---
+
+### 追加需求（2026-11-09 用户）：手动同步按钮
+
+**Interfaces:**
+- Produces:
+  - `POST /api/repos/:id/sync` → 触发该仓 scheduler.runOnce()（互斥安全：自动轮询在飞时 `{skipped:true}`）；始终 200，载荷 `{ok: boolean, skipped?: boolean, newCommits?: number, error?: string}`
+  - Overview：状态条旁/每仓行"立即同步"按钮 → POST → 结果横幅（"手动同步完成：检出 N 个新提交"/"已有同步在进行中"/"同步失败：<err>"）+ refresh()
+- 实现：api.ts 端点（resolveRepo → schedulers 按 repoId 定位 → await runOnce）；前端 Overview 按钮
+- 验收：真实仓上手动触发检出；自动轮询在飞时按钮返回 skipped 且不炸
