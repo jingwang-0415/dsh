@@ -138,7 +138,7 @@ onMounted(async () => {
           <h3>{{ result.branchPair.repoA }} 独有（{{ result.onlyInA.length }}）</h3>
           <ul class="rows">
             <li v-for="c in result.onlyInA" :key="c.sha" class="row">
-              <code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}
+              <RouterLink :to="`/commit/${c.sha}${repoA ? `?repo=${repoA}` : ''}`"><code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}</RouterLink>
               <span class="muted"> {{ c.authorName }} · {{ formatRelative(c.committedAt) }}</span>
             </li>
             <li v-if="result.onlyInA.length === 0" class="muted">（无）</li>
@@ -148,7 +148,7 @@ onMounted(async () => {
           <h3>{{ result.branchPair.repoB }} 独有（{{ result.onlyInB.length }}）</h3>
           <ul class="rows">
             <li v-for="c in result.onlyInB" :key="c.sha" class="row">
-              <code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}
+              <RouterLink :to="`/commit/${c.sha}${repoB ? `?repo=${repoB}` : ''}`"><code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}</RouterLink>
               <span class="muted"> {{ c.authorName }} · {{ formatRelative(c.committedAt) }}</span>
             </li>
             <li v-if="result.onlyInB.length === 0" class="muted">（无）</li>

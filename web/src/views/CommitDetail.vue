@@ -5,6 +5,8 @@ import { api, formatRelative, type CommitRow, type InclusionRow } from '../api'
 
 const route = useRoute()
 const sha = route.params.sha as string
+// repo 作用域：跨仓直链等入口带 ?repo= 时按该仓解析（缺省服务端取第一仓）
+const repo = route.query.repo as string | undefined
 const commit = ref<CommitRow | null>(null)
 const results = ref<InclusionRow[]>([])
 const error = ref('')
@@ -16,7 +18,7 @@ const other = computed(() => results.value.filter(r => !r.contains && r.status !
 
 onMounted(async () => {
   try {
-    const data = await api.commitInclusion(sha)
+    const data = await api.commitInclusion(sha, repo)
     commit.value = data.commit
     results.value = data.results
   } catch (e) {
