@@ -61,6 +61,21 @@ describe('loadConfig', () => {
         .toThrow(/id 不能为/)
     }
   })
+  it('传输兜底三分支语义：bypassGitConfig 缺省 false；httpProxy 缺省 undefined（未设=跟随系统 git 配置）', () => {
+    // fix round 1：default('') 会让存量仓被静默强制无代理（-c http.proxy= 同时压制全局配置
+    // 代理与 env 代理，依赖内网代理的仓升级后静默断连）——未设必须保持 undefined
+    const cfg = loadConfig(writeConfig(valid))
+    expect(cfg.repos[0].bypassGitConfig).toBe(false)
+    expect(cfg.repos[0].httpProxy).toBeUndefined()
+    expect('httpProxy' in cfg.repos[0]).toBe(false)
+  })
+  it('传输兜底字段显式值解析保留（true / 代理串）', () => {
+    const cfg = loadConfig(writeConfig({
+      repos: [{ id: 'demo', url: 'ssh://git@example.com/demo.git', bypassGitConfig: true, httpProxy: 'http://p:1' }]
+    }))
+    expect(cfg.repos[0].bypassGitConfig).toBe(true)
+    expect(cfg.repos[0].httpProxy).toBe('http://p:1')
+  })
 })
 
 describe('isBranchExcluded', () => {

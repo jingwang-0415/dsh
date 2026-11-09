@@ -12,6 +12,22 @@ const formUrl = ref('')
 const formBranch = ref('')
 const formInterval = ref('')
 const formExclude = ref('')
+// v1.3.2 传输（高级）：直连 checkbox + HTTP 代理输入
+const formBypass = ref(false)
+const formProxy = ref('')
+
+// 传输兜底载荷构造（v1.3.2，POST 与 PATCH 共用同一三分支语义，契约见 server repoSchema/PATCH）：
+// - bypassGitConfig 恒带 boolean（复选框现状）
+// - httpProxy：有值 → 显式代理；勾直连且留空 → ''（强制无代理）；留空未勾 → 省键（跟随系统 git 配置）
+function transportFields(bypass: boolean, proxyRaw: string): { bypassGitConfig: boolean; httpProxy?: string } {
+  const proxy = proxyRaw.trim()
+  return { bypassGitConfig: bypass, ...(proxy ? { httpProxy: proxy } : bypass ? { httpProxy: '' } : {}) }
+}
+
+// T1 裁定：GET 行 httpProxy 未设省键（DTO optional）——读取一律经此兜底，
+// 表格标记与编辑预填共用，键省略时不误渲染"代理"/不误预填
+const bypassOf = (r: RepoDto): boolean => r.bypassGitConfig ?? false
+const proxyOf = (r: RepoDto): string => ('httpProxy' in r ? (r.httpProxy ?? '') : '')
 
 // 前端先行校验：与服务端 repoSchema 契约对齐（id 同款白名单正则、url 非空、间隔为 ≥5 整数秒），
 // 拦掉必败请求；服务端仍是唯一裁决（400/409/500 的 message/code 原样上横幅）
@@ -53,9 +69,11 @@ async function onAdd(): Promise<void> {
   const globs = formExclude.value.split(',').map(s => s.trim()).filter(Boolean)
   if (globs.length) body.branchExclude = globs
   if (formInterval.value.trim()) body.pollIntervalSeconds = Number(formInterval.value)
+  Object.assign(body, transportFields(formBypass.value, formProxy.value))
   try {
     await api.addRepo(body)
     formId.value = ''; formUrl.value = ''; formBranch.value = ''; formInterval.value = ''; formExclude.value = ''
+    formBypass.value = false; formProxy.value = ''
     await refresh()
   } catch (e) {
     error.value = (e as Error).message
@@ -87,11 +105,13 @@ function badge(r: RepoDto): { cls: string; text: string } {
 
 // v1.3.1 行内编辑：一次只允许一行进入编辑态（editingId 定位目标行）。
 // url/id 是仓的身份键不可改（编辑态只读展示 + title 提示），可编辑的只有
-// pollIntervalSeconds/defaultBranch/branchExclude 三键——与 PATCH 白名单契约一致
+// pollIntervalSeconds/defaultBranch/branchExclude 三键 + v1.3.2 传输兜底两键——与 PATCH 白名单契约一致
 const editingId = ref('')
 const editBranch = ref('')
 const editInterval = ref('')
 const editExclude = ref('')
+const editBypass = ref(false)
+const editProxy = ref('')
 const URL_IMMUTABLE_HINT = 'url 不可修改，更换地址请删除后重新添加'
 
 function startEdit(r: RepoDto): void {
@@ -99,6 +119,8 @@ function startEdit(r: RepoDto): void {
   editBranch.value = r.defaultBranch
   editInterval.value = String(r.pollIntervalSeconds)
   editExclude.value = (r.branchExclude ?? []).join(',')
+  editBypass.value = bypassOf(r)
+  editProxy.value = proxyOf(r)
   error.value = ''
 }
 
@@ -126,11 +148,13 @@ async function onSave(): Promise<void> {
   const v = validateEdit()
   if (v) { error.value = v; return }
   try {
-    // 载荷仅三键白名单（无 url/id）；排除 glob 逗号拆分（与添加表单同款 filter(Boolean) 语义）
+    // 载荷白名单（无 url/id）；排除 glob 逗号拆分（与添加表单同款 filter(Boolean) 语义）；
+    // 传输两键经 transportFields 同一三分支语义构造（省键=服务端不改动）
     await api.updateRepo(editingId.value, {
       pollIntervalSeconds: Number(String(editInterval.value).trim()),
       defaultBranch: editBranch.value.trim(),
-      branchExclude: editExclude.value.split(',').map(s => s.trim()).filter(Boolean)
+      branchExclude: editExclude.value.split(',').map(s => s.trim()).filter(Boolean),
+      ...transportFields(editBypass.value, editProxy.value)
     })
     editingId.value = ''
     error.value = ''
@@ -155,12 +179,26 @@ onMounted(() => { void refresh() })
       <label>默认分支 <input v-model="formBranch" placeholder="master" /></label>
       <label>轮询间隔秒 <input v-model="formInterval" placeholder="30" /></label>
       <label>排除 glob <input v-model="formExclude" placeholder="vendor/**,docs/**" /></label>
+      <!-- v1.3.2 传输（高级）：按仓兜底系统 git 配置被内源代理劫持的场景。
+           语义：留空未勾=跟随系统；勾直连=绕过系统/全局 git 配置（代理留空即强制无代理）；
+           填 http://…=显式代理覆盖 -->
+      <div class="transport-group">
+        <span class="transport-title">传输（高级）</span>
+        <label class="inline-check">
+          <input type="checkbox" class="add-bypass" v-model="formBypass" /> 直连（绕过系统 git 配置）
+        </label>
+        <input
+          class="add-proxy" v-model="formProxy"
+          title="留空=跟随系统 git 配置；填 http://… = 显式代理；勾选直连时通常留空"
+          placeholder="留空=跟随系统 git 配置；填 http://… = 显式代理；勾选直连时通常留空"
+        />
+      </div>
       <button class="btn" type="submit">添加</button>
     </form>
 
     <table class="tbl">
       <thead>
-        <tr><th>id</th><th>url</th><th>默认分支</th><th>轮询间隔</th><th>排除 glob</th><th>调度状态</th><th>操作</th></tr>
+        <tr><th>id</th><th>url</th><th>默认分支</th><th>轮询间隔</th><th>排除 glob</th><th>传输</th><th>调度状态</th><th>操作</th></tr>
       </thead>
       <tbody>
         <tr v-for="r in repos" :key="r.id">
@@ -173,6 +211,21 @@ onMounted(() => { void refresh() })
           <td v-else>{{ r.pollIntervalSeconds }}s</td>
           <td v-if="editingId === r.id"><input class="edit-exclude" v-model="editExclude" /></td>
           <td v-else class="muted">{{ r.branchExclude?.join(',') || '—' }}</td>
+          <!-- v1.3.2 传输列：编辑态就地给 checkbox+代理输入；展示态徽标（缺省 —）。
+               读取经 bypassOf/proxyOf 兜底——GET 行 httpProxy 未设省键不误渲染 -->
+          <td class="transport-cell">
+            <template v-if="editingId === r.id">
+              <label class="inline-check" title="绕过系统/全局 git 配置（直连）">
+                <input type="checkbox" class="edit-bypass" v-model="editBypass" /> 直连
+              </label>
+              <input class="edit-proxy" v-model="editProxy" placeholder="http://…" />
+            </template>
+            <template v-else>
+              <span v-if="bypassOf(r)" class="badge badge-blue" title="绕过系统 git 配置">直连</span>
+              <span v-if="proxyOf(r)" class="badge badge-yellow" :title="proxyOf(r)">代理</span>
+              <span v-if="!bypassOf(r) && !proxyOf(r)" class="muted">—</span>
+            </template>
+          </td>
           <td><span class="badge" :class="badge(r).cls">{{ badge(r).text }}</span></td>
           <td>
             <template v-if="editingId === r.id">
@@ -199,4 +252,12 @@ onMounted(() => { void refresh() })
 /* 行内编辑输入与添加表单同视觉语言；url 列编辑态保持只读文本（灰化以示不可改） */
 .tbl input { padding: 2px 8px; border-radius: 6px; border: 1px solid #d0d7de; width: 140px; }
 .url-cell { color: #656d76; }
+/* v1.3.2 传输（高级）区：与表单 label 同列布局语言；代理输入放宽便于粘贴完整 URL */
+.transport-group { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.transport-title { font-weight: 600; }
+.inline-check { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.inline-check input { min-width: 0; }
+.add-proxy { padding: 4px 8px; border-radius: 6px; border: 1px solid #d0d7de; min-width: 280px; }
+.transport-cell { white-space: nowrap; }
+.transport-cell .edit-proxy { width: 120px; }
 </style>

@@ -68,9 +68,10 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
   })
 
   app.get('/api/repos', async () =>
-    // branchExclude 一并暴露：用户在 UI 配置的排除 glob 需可回读查看
-    config.repos.map(({ id, url, defaultBranch, branchExclude, pollIntervalSeconds }) =>
-      ({ id, url, defaultBranch, branchExclude, pollIntervalSeconds })
+    // branchExclude 与传输兜底两字段一并暴露：UI 配置的排除 glob/直连/代理需可回读查看；
+    // httpProxy 未设时 undefined → JSON 省键（fix round 1 三分支语义：未设=跟随系统 git 配置）
+    config.repos.map(({ id, url, defaultBranch, branchExclude, pollIntervalSeconds, bypassGitConfig, httpProxy }) =>
+      ({ id, url, defaultBranch, branchExclude, pollIntervalSeconds, bypassGitConfig, httpProxy })
     )
   )
 
@@ -144,8 +145,12 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
         message: 'url 不可修改，请删除后重新添加以更换地址'
       })
     }
-    // 逐字段值校验（与 repoSchema 同阈值：整数 ≥5 / 非空字符串 / 字符串数组），透传 invalid
-    const patch: { pollIntervalSeconds?: number; defaultBranch?: string; branchExclude?: string[] } = {}
+    // 逐字段值校验（与 repoSchema 同阈值：整数 ≥5 / 非空字符串 / 字符串数组 / boolean / string），
+    // 透传 invalid
+    const patch: {
+      pollIntervalSeconds?: number; defaultBranch?: string; branchExclude?: string[]
+      bypassGitConfig?: boolean; httpProxy?: string
+    } = {}
     const issues: string[] = []
     if (body.pollIntervalSeconds !== undefined) {
       const n = body.pollIntervalSeconds
@@ -173,18 +178,39 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
         issues.push('branchExclude: 需为字符串数组')
       }
     }
+    if (body.bypassGitConfig !== undefined) {
+      if (typeof body.bypassGitConfig === 'boolean') {
+        patch.bypassGitConfig = body.bypassGitConfig
+      } else {
+        issues.push('bypassGitConfig: 需为布尔值')
+      }
+    }
+    if (body.httpProxy !== undefined) {
+      // 空串合法 = 强制无代理（显式覆盖劫持的全局代理），与 repoSchema z.string() 同阈值；
+      // 键缺省走不到这里（undefined 不落对象，"未设=跟随系统"语义得以保留）
+      if (typeof body.httpProxy === 'string') {
+        patch.httpProxy = body.httpProxy
+      } else {
+        issues.push('httpProxy: 需为字符串')
+      }
+    }
     if (issues.length > 0) {
       return reply.code(400).send({ code: 'invalid', message: issues.join('; ') })
     }
     if (Object.keys(patch).length === 0) {
-      return reply.code(400).send({ code: 'no_fields', message: '无可更新字段（仅允许 pollIntervalSeconds/defaultBranch/branchExclude）' })
+      return reply.code(400).send({
+        code: 'no_fields',
+        message: '无可更新字段（仅允许 pollIntervalSeconds/defaultBranch/branchExclude/bypassGitConfig/httpProxy）'
+      })
     }
-    // 回滚纪律同 POST/DELETE：变更前 snapshot 旧三字段，writeConfig 失败 → 原位 assign 回旧值
+    // 回滚纪律同 POST/DELETE：变更前 snapshot 旧五字段，writeConfig 失败 → 原位 assign 回旧值
     // （仍是同一对象，调度器引用不断）+ 500，保持 config 内存与磁盘一致
     const snapshot = {
       pollIntervalSeconds: repo.pollIntervalSeconds,
       defaultBranch: repo.defaultBranch,
-      branchExclude: repo.branchExclude
+      branchExclude: repo.branchExclude,
+      bypassGitConfig: repo.bypassGitConfig,
+      httpProxy: repo.httpProxy
     }
     updateRepoFields(repo, patch)
     try {
@@ -200,11 +226,29 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
       `INSERT INTO repos (id, url, default_branch, created_at) VALUES (?,?,?,?)
        ON CONFLICT(id) DO UPDATE SET default_branch=excluded.default_branch`
     ).run(repo.id, repo.url, repo.defaultBranch, Date.now())
-    // 返回形状与 GET /api/repos 行一致（四字段 + branchExclude）
+    // 返回形状与 GET /api/repos 行一致（七个字段）
     return {
       id: repo.id, url: repo.url, defaultBranch: repo.defaultBranch,
-      branchExclude: repo.branchExclude, pollIntervalSeconds: repo.pollIntervalSeconds
+      branchExclude: repo.branchExclude, pollIntervalSeconds: repo.pollIntervalSeconds,
+      bypassGitConfig: repo.bypassGitConfig, httpProxy: repo.httpProxy
     }
+  })
+
+  // —— 手动同步（v1.3.2 追加需求）：把调度器的一轮 fetch 暴露为界面能力 ——
+
+  // 语义：runOnce 自带互斥守卫（自动轮询在飞 → skipped:true，端点与自动 loop 天然共存）；
+  // 始终 200，结果经载荷表达：检出数 / 进行中跳过 / 失败 error 透传；
+  // 未知仓与无调度器 → 404 repo_not_found（与 GET /api/status?repo= 未知 id 同款）
+  app.post('/api/repos/:id/sync', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const repo = config.repos.find(r => r.id === id)
+    if (!repo) return reply.code(404).send({ code: 'repo_not_found' })
+    const s = schedulers.find(sc => sc.repoId === repo.id)
+    if (!s) return reply.code(404).send({ code: 'repo_not_found' })
+    const r = await s.runOnce()
+    if (r.skipped) return { ok: true, skipped: true, message: '已有同步在进行中' }
+    if (r.error) return { ok: false, error: r.error }
+    return { ok: true, newCommits: r.newCommits ?? 0 }
   })
 
   app.get('/api/branches', async (req, reply) => {

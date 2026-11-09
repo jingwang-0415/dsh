@@ -50,7 +50,50 @@ a { color: #0969da; text-decoration: none; }
   body { background: #0d1117; color: #e6edf3; }
   .tbl, .row, .commit-body, .rows .row { background: #161b22; border-color: #30363d; }
   .tbl th { background: #161b22; }
+  .tbl th, .tbl td { border-color: #30363d; }
   .muted { color: #8b949e; }
   code { background: #21262d; }
   .nav a.router-link-active { background: #121d2f; }
+
+  /* 交互控件显式配色：修复“浅底继承浅字”不可读（v1.3.2 Task 3） */
+  .btn { background: #21262d; color: #e6edf3; border-color: #30363d; }
+  .btn:hover { background: #30363d; }
+
+  /* 表单控件：显式深色底/字/边框，避免 UA 行为不一致。
+     带 .app/.repos 前缀的三条用更高特异性（0,3,1）压过 Repos.vue / CrossRepo.vue
+     scoped 的浅色边框（border: #d0d7de, 0,2,1）；
+     :not([type="checkbox"]) 排除 UA 自绘的复选框。 */
+  .pick select, textarea, input:not([type="checkbox"]),
+  .app .pick input:not([type="checkbox"]),
+  .repos .add-form input:not([type="checkbox"]),
+  .repos .tbl input:not([type="checkbox"]) {
+    background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+  }
+  .pick select:focus, textarea:focus, input:not([type="checkbox"]):focus,
+  .app .pick input:not([type="checkbox"]):focus,
+  .repos .add-form input:not([type="checkbox"]):focus,
+  .repos .tbl input:not([type="checkbox"]):focus { border-color: #58a6ff; }
+
+  /* 链接与错误文字：#0969da/#cf222e 在深底上仅 3.3–3.7:1，提亮至 GitHub 暗色系 */
+  .nav a { color: #58a6ff; }
+  a { color: #58a6ff; }
+  .muted.err { color: #f85149; }
+
+  /* badge/banner：浅色粉彩底在暗色下刺眼，换半透明色底 + 提亮前景（对比 ≥4.5:1） */
+  .badge-red, .banner-red { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+  .badge-green, .banner-green { background: rgba(63, 185, 80, 0.15); color: #56d364; }
+  .badge-yellow, .banner-yellow { background: rgba(187, 128, 9, 0.25); color: #d29922; }
+  .badge-gray, .banner-gray { background: rgba(139, 148, 158, 0.15); color: #8b949e; }
+  .badge-blue { background: rgba(88, 166, 255, 0.15); color: #58a6ff; }
+
+  /* 行状态色：暗色块已有 .rows .row(0,2,0) 覆盖浅底，此处补齐文字/色底（特异性 0,2,1 确保生效） */
+  .rows li.row-miss { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+  .rows li.row-ok { background: rgba(63, 185, 80, 0.15); color: #56d364; }
+  .rows li.row-other { background: rgba(139, 148, 158, 0.15); color: #8b949e; }
+  .dot-red { background: #f85149; }
+  .dot-green { background: #3fb950; }
+  .dot-gray { background: #8b949e; }
+
+  /* Repos.vue scoped .url-cell(#656d76) 在暗色表格上仅 3.3:1，用更高特异性提亮 */
+  .repos .tbl .url-cell { color: #8b949e; }
 }

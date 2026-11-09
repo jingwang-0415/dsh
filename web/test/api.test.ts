@@ -52,6 +52,39 @@ describe('repo 作用域请求', () => {
   })
 })
 
+// 手动同步（v1.3.2 追加需求）：POST /api/repos/:id/sync，id 进路径须转义；
+// 载荷结果透传（ok/skipped/newCommits），HTTP 非 200 走 sendJson 通道抛 message
+describe('手动同步 api.syncRepo', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('POST 到 /api/repos/:id/sync（id encodeURIComponent），载荷原样返回', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      ({ ok: true, json: async () => ({ ok: true, newCommits: 2 }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const r = await api.syncRepo('r1')
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/repos/r1/sync')
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.method).toBe('POST')
+    expect(r).toEqual({ ok: true, newCommits: 2 })
+
+    // 特殊字符 id 转义纪律（与 removeRepo/updateRepo 同源）
+    await api.syncRepo('a/b')
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/repos/a%2Fb/sync')
+  })
+
+  it('skipped / ok:false 载荷透传；HTTP 404 → 抛服务端 code', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') throw new Error('syncRepo 必须是 POST')
+      if (String(_url).includes('busy')) return { ok: true, json: async () => ({ ok: true, skipped: true, message: '已有同步在进行中' }) }
+      if (String(_url).includes('fail')) return { ok: true, json: async () => ({ ok: false, error: 'boom' }) }
+      return { ok: false, json: async () => ({ code: 'repo_not_found' }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await api.syncRepo('busy')).toEqual({ ok: true, skipped: true, message: '已有同步在进行中' })
+    expect(await api.syncRepo('fail')).toEqual({ ok: false, error: 'boom' })
+    await expect(api.syncRepo('ghost')).rejects.toThrow('repo_not_found')
+  })
+})
+
 class FakeEventSource {
   static last: FakeEventSource | null = null
   listeners = new Map<string, (e: MessageEvent) => void>()

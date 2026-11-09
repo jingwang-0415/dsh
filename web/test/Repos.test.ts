@@ -11,7 +11,16 @@ const statusPayload = {
   lastError: null, lastNewCommits: 0, mirrorDir: '/m', lastFetch: null
 }
 
-interface FetchOpts { postResult?: { ok: boolean; json: unknown }; patchResult?: { ok: boolean; json: unknown } }
+interface RepoRowShape {
+  id: string; url: string; defaultBranch: string; branchExclude: string[]; pollIntervalSeconds: number
+  bypassGitConfig?: boolean; httpProxy?: string   // T1 裁定：GET 行可能省键（undefined=跟随系统）
+}
+
+interface FetchOpts {
+  postResult?: { ok: boolean; json: unknown }
+  patchResult?: { ok: boolean; json: unknown }
+  reposList?: RepoRowShape[]
+}
 
 // 按方法/路径路由的 fetch 桩（CommitDetail/CrossRepo 同款 memory router + stub 模式），记录全部调用供载荷断言
 function stubFetch(opts: FetchOpts = {}) {
@@ -27,7 +36,7 @@ function stubFetch(opts: FetchOpts = {}) {
     }
     if (init?.method === 'DELETE') return { ok: true, json: async () => ({ ok: true }) }
     if (url.startsWith('/api/status')) return { ok: true, json: async () => statusPayload }
-    if (url === '/api/repos') return { ok: true, json: async () => reposPayload }
+    if (url === '/api/repos') return { ok: true, json: async () => opts.reposList ?? reposPayload }
     return { ok: true, json: async () => ({}) }
   })
 }
@@ -62,8 +71,10 @@ describe('Repos 视图（仓库管理）', () => {
     const i = calls.findIndex(c => methodOf(c) === 'POST')
     expect(i).toBeGreaterThan(-1)
     expect(urlOf(calls[i])).toBe('/api/repos')
+    // 载荷：必填两键 + 按需三键 + bypassGitConfig 恒带（v1.3.2）；本例传输字段全默认 →
+    // bypassGitConfig:false、httpProxy 省键（跟随系统 git 配置）
     expect(JSON.parse(String((calls[i][1] as RequestInit).body))).toEqual({
-      id: 'beta', url: 'https://example.com/beta.git', defaultBranch: 'trunk'
+      id: 'beta', url: 'https://example.com/beta.git', defaultBranch: 'trunk', bypassGitConfig: false
     })
     // 成功 → 列表刷新：POST 之后再次 GET /api/repos
     expect(calls.slice(i + 1).some(c => urlOf(c) === '/api/repos')).toBe(true)
@@ -153,9 +164,11 @@ describe('Repos 视图（仓库管理）', () => {
     const i = calls.findIndex(c => methodOf(c) === 'PATCH')
     expect(i).toBeGreaterThan(-1)
     expect(urlOf(calls[i])).toBe('/api/repos/r1')
-    // 载荷仅三键白名单（无 url/id）；排除 glob 逗号拆分为字符串数组
+    // 载荷白名单（无 url/id）；排除 glob 逗号拆分为字符串数组；
+    // v1.3.2 传输两键恒带 boolean/按三分支——默认行无传输配置 → bypassGitConfig:false、httpProxy 省键
     expect(JSON.parse(String((calls[i][1] as RequestInit).body))).toEqual({
-      pollIntervalSeconds: 7, defaultBranch: 'develop', branchExclude: ['tmp/**', 'dist/**']
+      pollIntervalSeconds: 7, defaultBranch: 'develop', branchExclude: ['tmp/**', 'dist/**'],
+      bypassGitConfig: false
     })
     // 保存成功 → 退出编辑态 + 刷新列表（PATCH 之后再次 GET /api/repos）
     expect(wrapper.find('.edit-branch').exists()).toBe(false)
@@ -229,5 +242,87 @@ describe('Repos 视图（仓库管理）', () => {
     const patchCall = fetchMock.mock.calls.find(c => methodOf(c) === 'PATCH')
     expect(patchCall).toBeDefined()
     expect(JSON.parse(String((patchCall![1] as RequestInit).body))).toMatchObject({ pollIntervalSeconds: 5 })
+  })
+
+  it('传输（高级）：勾选直连且代理留空 → POST 载荷 bypassGitConfig:true + httpProxy:""（强制无代理）', async () => {
+    const { wrapper, fetchMock } = await mountView()
+    await wrapper.find('input[placeholder="repo-id"]').setValue('beta')
+    await wrapper.find('input[placeholder="https://example.com/beta.git"]').setValue('https://example.com/beta.git')
+    await wrapper.find('.add-bypass').setValue(true)
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    const call = fetchMock.mock.calls.find(c => methodOf(c) === 'POST')
+    expect(call).toBeDefined()
+    expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({
+      id: 'beta', url: 'https://example.com/beta.git', bypassGitConfig: true, httpProxy: ''
+    })
+  })
+
+  it('传输（高级）：填 http://… 显式代理 → 载荷带 httpProxy 值（未勾直连 bypassGitConfig:false）', async () => {
+    const { wrapper, fetchMock } = await mountView()
+    await wrapper.find('input[placeholder="repo-id"]').setValue('beta')
+    await wrapper.find('input[placeholder="https://example.com/beta.git"]').setValue('https://example.com/beta.git')
+    await wrapper.find('.add-proxy').setValue('http://127.0.0.1:8080')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    const call = fetchMock.mock.calls.find(c => methodOf(c) === 'POST')
+    expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({
+      id: 'beta', url: 'https://example.com/beta.git', bypassGitConfig: false, httpProxy: 'http://127.0.0.1:8080'
+    })
+  })
+
+  it('表格传输列：bypassGitConfig→直连徽标、httpProxy 非空→代理徽标、缺省/空串→—', async () => {
+    const { wrapper } = await mountView({
+      reposList: [
+        { id: 'r1', url: 'u1', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30 },
+        { id: 'r2', url: 'u2', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, bypassGitConfig: true },
+        { id: 'r3', url: 'u3', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, httpProxy: 'http://p:1' },
+        { id: 'r4', url: 'u4', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, bypassGitConfig: false, httpProxy: '' }
+      ]
+    })
+    const cells = wrapper.findAll('tbody tr').map(row => row.find('.transport-cell').text())
+    expect(cells[0]).toBe('—')            // GET 行省键（T1：undefined=跟随系统）→ —
+    expect(cells[1]).toContain('直连')
+    expect(cells[2]).toContain('代理')
+    expect(cells[3]).toBe('—')            // httpProxy ''=强制无代理但非"代理"标记，未勾直连 → —
+  })
+
+  it('行内编辑传输字段：预填当前值；保存 PATCH 带 bypassGitConfig/httpProxy（改值与直连空代理两轮）', async () => {
+    const { wrapper, fetchMock } = await mountView({
+      reposList: [
+        { id: 'r1', url: 'u1', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, httpProxy: 'http://old:1' }
+      ]
+    })
+    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+
+    // 预填：GET 行省 bypassGitConfig 键 → unchecked（?? false 兜底）；httpProxy 键在 → 原值
+    expect((wrapper.find('.edit-bypass').element as HTMLInputElement).checked).toBe(false)
+    expect((wrapper.find('.edit-proxy').element as HTMLInputElement).value).toBe('http://old:1')
+
+    // 第一轮：显式换代理值（未勾直连）→ PATCH 带 bypassGitConfig:false + httpProxy 新值
+    await wrapper.find('.edit-proxy').setValue('http://new:2')
+    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+    const i = fetchMock.mock.calls.findIndex(c => methodOf(c) === 'PATCH')
+    expect(JSON.parse(String((fetchMock.mock.calls[i][1] as RequestInit).body))).toEqual({
+      pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [],
+      bypassGitConfig: false, httpProxy: 'http://new:2'
+    })
+
+    // 第二轮：保存后列表刷新（stub 静态回同一行 → 预填回 http://old:1）→ 清空代理、勾直连
+    // → httpProxy:''（直连+留空 = 强制无代理分支）
+    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+    await wrapper.find('.edit-proxy').setValue('')
+    await wrapper.find('.edit-bypass').setValue(true)
+    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+    const patchCalls = fetchMock.mock.calls.filter(c => methodOf(c) === 'PATCH')
+    expect(patchCalls).toHaveLength(2)
+    expect(JSON.parse(String((patchCalls[1][1] as RequestInit).body))).toEqual({
+      pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [],
+      bypassGitConfig: true, httpProxy: ''
+    })
   })
 })
