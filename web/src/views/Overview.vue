@@ -72,8 +72,39 @@ function openCompare(b: BranchRow): void {
   void router.push({ path: '/compare', query: { repo: repoId.value, base: defaultBranch.value, target: b.name } })
 }
 
-// 切仓：回写当前 query（URL 即状态），再按新仓刷新
+// v1.3.2 手动同步（追加需求）：状态条右侧"立即同步"按钮 → POST /api/repos/:id/sync。
+// 请求期间 disabled 防连点；结果写横幅（绿=检出 N / 灰=进行中跳过或无新提交 / 红=失败）；
+// 完成后 refresh() 让状态条/分支行立即反映本轮 fetch
+const syncing = ref(false)
+const syncNote = ref<{ cls: string; text: string } | null>(null)
+
+async function onSyncNow(): Promise<void> {
+  if (syncing.value || !repoId.value) return
+  syncing.value = true
+  try {
+    const r = await api.syncRepo(repoId.value)
+    if (!r.ok) {
+      syncNote.value = { cls: 'banner-red', text: `同步失败：${r.error ?? '未知错误'}` }
+    } else if (r.skipped) {
+      // 自动轮询在飞被互斥跳过：非故障，灰横幅 + 服务端文案兜底
+      syncNote.value = { cls: 'banner-gray', text: r.message ?? '已有同步在进行中' }
+    } else if ((r.newCommits ?? 0) > 0) {
+      syncNote.value = { cls: 'banner-green', text: `手动同步完成：检出 ${r.newCommits} 个新提交` }
+    } else {
+      syncNote.value = { cls: 'banner-gray', text: '手动同步完成：无新提交' }
+    }
+  } catch (e) {
+    // sendJson 通道抛错（网络断开/HTTP 非 200）：message 透传（契约 message 优先 code 兜底）
+    syncNote.value = { cls: 'banner-red', text: `同步失败：${(e as Error).message}` }
+  } finally {
+    syncing.value = false
+    await refresh()
+  }
+}
+
+// 切仓：回写当前 query（URL 即状态），再按新仓刷新；手动同步横幅属上一仓结果，一并清掉
 function onRepoChange(): void {
+  syncNote.value = null
   void router.replace({ path: '/', query: repoId.value ? { repo: repoId.value } : {} })
   void refresh()
 }
@@ -85,7 +116,12 @@ function onRepoChange(): void {
       <label>仓库 <select v-model="repoId" @change="onRepoChange"><option v-for="r in repos" :key="r.id" :value="r.id">{{ r.id }}</option></select></label>
       <button class="btn" @click="router.push('/repos')">仓库管理</button>
     </div>
-    <div class="banner" :class="bannerClass()">{{ bannerText() }}</div>
+    <div class="status-row">
+      <div class="banner" :class="bannerClass()">{{ bannerText() }}</div>
+      <!-- v1.3.2 手动同步：未选中仓（初始加载）或在飞时禁用 -->
+      <button class="btn sync-btn" :disabled="syncing || !repoId" title="立即拉取该仓远端（与自动轮询互斥安全）" @click="onSyncNow">立即同步</button>
+    </div>
+    <p v-if="syncNote" class="banner sync-note" :class="syncNote.cls">{{ syncNote.text }}</p>
     <p v-if="error" class="banner banner-red">加载失败：{{ error }}</p>
     <p v-if="status?.lastError" class="muted err">最近错误：{{ status.lastError }}</p>
 
@@ -125,3 +161,12 @@ function onRepoChange(): void {
     </details>
   </section>
 </template>
+
+<style scoped>
+/* v1.3.2 手动同步：状态条与按钮同行（按钮固定右侧，状态条占满剩余宽度） */
+.status-row { display: flex; align-items: center; gap: 8px; }
+.status-row .banner { flex: 1; margin-bottom: 8px; }
+.sync-btn { flex-shrink: 0; }
+.sync-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.sync-note { margin-top: 0; }
+</style>

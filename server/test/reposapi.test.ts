@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -457,5 +457,73 @@ describe('PATCH /api/repos/:id（运行时调整轮询间隔与分支属性，�
     }
     expect(handle.config.repos[0].bypassGitConfig).toBe(false)
     expect(handle.config.repos[0].httpProxy).toBe('')
+  })
+})
+
+describe('POST /api/repos/:id/sync（v1.3.2 手动同步）', () => {
+  let o: ReturnType<typeof createOriginRepo>
+  let handle: AppHandle
+
+  // buildApp 装配的 schedulers 只构造不 start（app.ts 先例）：无自动轮询竞争，
+  // runOnce 节奏完全由用例经 sync 端点驱动——端点本身就是手动触发通道
+  beforeAll(async () => {
+    o = createOriginRepo('gsm-sync-')
+    o.commitFile('s.txt', 's')   // 同秒同内容 SHA 碰撞规避（multirepo 先例）
+    const dir = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-syncapi-')))
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ repos: [{ id: 's1', url: o.dir }] }))
+    handle = await buildApp({
+      configPath: join(dir, 'config.json'),
+      dataDir: trackTmp(mkdtempSync(join(tmpdir(), 'gsm-syncapi-data-')))
+    })
+  })
+
+  // 只关停：临时目录由外层 cleanupTracked 统一清理；schedulers 从未 start，close 时无在飞 runOnce
+  afterAll(async () => { await handle.close() })
+
+  it('未知仓 → 404 repo_not_found', async () => {
+    const res = await handle.app.inject({ method: 'POST', url: '/api/repos/ghost/sync' })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toMatchObject({ code: 'repo_not_found' })
+  })
+
+  it('手动触发：首轮 clone+回填 → ok:true 检出回填提交；上游新提交后再触发 → newCommits=1；空轮 → 0', async () => {
+    const first = await handle.app.inject({ method: 'POST', url: '/api/repos/s1/sync' })
+    expect(first.statusCode).toBe(200)
+    // 首轮全量回填不产生新提交事件，但回填检出行数经端点可见（README + s.txt）
+    expect(first.json()).toEqual({ ok: true, newCommits: 2 })
+
+    o.commitFile('manual.txt', 'm')   // 上游新提交
+    const second = await handle.app.inject({ method: 'POST', url: '/api/repos/s1/sync' })
+    expect(second.statusCode).toBe(200)
+    expect(second.json()).toEqual({ ok: true, newCommits: 1 })
+
+    // 无上游变化再触发：幂等空轮，载荷表达"无新提交"（始终 200）
+    const third = await handle.app.inject({ method: 'POST', url: '/api/repos/s1/sync' })
+    expect(third.statusCode).toBe(200)
+    expect(third.json()).toEqual({ ok: true, newCommits: 0 })
+  })
+
+  it('自动轮询在飞（running 标志在位）→ ok:true + skipped:true + 文案，不炸不重复 fetch', async () => {
+    const sched = handle.schedulers.find(s => s.repoId === 's1')
+    expect(sched).toBeDefined()
+    // 与 scheduler.test.ts 相同的标志操纵法：runOnce 互斥守卫读 running
+    sched!.running = true
+    try {
+      const res = await handle.app.inject({ method: 'POST', url: '/api/repos/s1/sync' })
+      expect(res.statusCode).toBe(200)
+      expect(res.json()).toEqual({ ok: true, skipped: true, message: '已有同步在进行中' })
+    } finally {
+      sched!.running = false   // 恢复，不污染后续用例
+    }
+  })
+
+  it('远端不可达 → 仍 200，载荷 ok:false + error 透传（结果经载荷而非状态码表达）', async () => {
+    rmSync(o.dir, { recursive: true, force: true })   // 远端消失（tracked 目录，cleanupTracked 幂等重删）
+    const res = await handle.app.inject({ method: 'POST', url: '/api/repos/s1/sync' })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { ok: boolean; error?: string }
+    expect(body.ok).toBe(false)
+    expect(typeof body.error).toBe('string')
+    expect(body.error!.length).toBeGreaterThan(0)
   })
 })

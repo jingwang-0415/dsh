@@ -234,6 +234,23 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
     }
   })
 
+  // —— 手动同步（v1.3.2 追加需求）：把调度器的一轮 fetch 暴露为界面能力 ——
+
+  // 语义：runOnce 自带互斥守卫（自动轮询在飞 → skipped:true，端点与自动 loop 天然共存）；
+  // 始终 200，结果经载荷表达：检出数 / 进行中跳过 / 失败 error 透传；
+  // 未知仓与无调度器 → 404 repo_not_found（与 GET /api/status?repo= 未知 id 同款）
+  app.post('/api/repos/:id/sync', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const repo = config.repos.find(r => r.id === id)
+    if (!repo) return reply.code(404).send({ code: 'repo_not_found' })
+    const s = schedulers.find(sc => sc.repoId === repo.id)
+    if (!s) return reply.code(404).send({ code: 'repo_not_found' })
+    const r = await s.runOnce()
+    if (r.skipped) return { ok: true, skipped: true, message: '已有同步在进行中' }
+    if (r.error) return { ok: false, error: r.error }
+    return { ok: true, newCommits: r.newCommits ?? 0 }
+  })
+
   app.get('/api/branches', async (req, reply) => {
     const repo = resolveRepo((req.query as { repo?: string }).repo)
     if (!repo) return reply.code(404).send({ code: 'repo_not_found' })

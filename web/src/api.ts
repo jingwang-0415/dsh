@@ -41,8 +41,15 @@ export interface CompareDto {
   behindCommits: CommitRow[]
 }
 
-// GET /api/repos 响应行：branchExclude 为服务端回读字段（UI 配置的排除 glob 可见）
-export interface RepoDto { id: string; url: string; defaultBranch: string; branchExclude: string[]; pollIntervalSeconds: number }
+// GET /api/repos 响应行：branchExclude 为服务端回读字段（UI 配置的排除 glob 可见）。
+// v1.3.2 传输兜底两字段回读：bypassGitConfig 恒在（default false），但 DTO 保持 optional——
+// T1 裁定 GET 行 httpProxy 未设时省键（undefined=跟随系统 git 配置），读侧一律 `?? false`
+// / `'httpProxy' in r` 形态兜底，形状漂移时 typecheck 门兜住
+export interface RepoDto {
+  id: string; url: string; defaultBranch: string; branchExclude: string[]; pollIntervalSeconds: number
+  bypassGitConfig?: boolean
+  httpProxy?: string
+}
 
 // v1.3 仓库生命周期：POST /api/repos 请求体。可选字段缺省 = 服务端 zod default（master/[]/30），
 // 前端按同款契约先行校验（id 白名单、url 非空）拦必败请求，服务端仍是唯一裁决
@@ -52,6 +59,10 @@ export interface RepoConfigDto {
   defaultBranch?: string
   branchExclude?: string[]
   pollIntervalSeconds?: number
+  // v1.3.2 传输兜底：POST 载荷 bypassGitConfig 恒带 boolean；httpProxy 三分支语义
+  // （undefined=跟随系统 git 配置，''=强制无代理，非空=显式代理），见 RepoDto 注
+  bypassGitConfig?: boolean
+  httpProxy?: string
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -123,15 +134,33 @@ export const api = {
   // 行内编辑（v1.3.1）：PATCH 成功返回与 GET /api/repos 行同形的五字段；错误走 sendJson 通道
   // message 优先、code 兜底（400 invalid 透传校验详情 / 500 config_write_failed）
   updateRepo: (id: string, patch: RepoPatchDto): Promise<RepoDto> =>
-    sendJson(`/api/repos/${encodeURIComponent(id)}`, 'PATCH', patch)
+    sendJson(`/api/repos/${encodeURIComponent(id)}`, 'PATCH', patch),
+  // 手动同步（v1.3.2）：POST /api/repos/:id/sync。服务端始终 200、结果经载荷表达
+  // （契约见 server/test/reposapi.test.ts）；HTTP 非 200/网络错走 sendJson 通道抛 message
+  syncRepo: (id: string): Promise<SyncResultDto> =>
+    sendJson(`/api/repos/${encodeURIComponent(id)}/sync`, 'POST')
 }
 
-// v1.3.1 行内编辑：PATCH /api/repos/:id 请求体 = 三键白名单（契约见 server/test/reposapi.test.ts）。
-// url/id 是仓的身份键，服务端一票拒绝（url_immutable），前端载荷也绝不携带
+// v1.3.2 手动同步响应：ok=false → error；skipped=true → 自动轮询在飞被互斥跳过（message 为文案）；
+// ok=true → newCommits 检出数
+export interface SyncResultDto {
+  ok: boolean
+  skipped?: boolean
+  newCommits?: number
+  error?: string
+  message?: string
+}
+
+// v1.3.1 行内编辑：PATCH /api/repos/:id 请求体 = 五键白名单（契约见 server/test/reposapi.test.ts）。
+// url/id 是仓的身份键，服务端一票拒绝（url_immutable），前端载荷也绝不携带。
+// v1.3.2 传输兜底两键入白名单：bypassGitConfig 恒带 boolean；httpProxy 省键=不改动
+// （服务端仅更新提供的键——"未设=跟随系统"语义在 PATCH 侧即保持现状）
 export interface RepoPatchDto {
   pollIntervalSeconds?: number
   defaultBranch?: string
   branchExclude?: string[]
+  bypassGitConfig?: boolean
+  httpProxy?: string
 }
 
 export function formatRelative(ts: number, now = Date.now()): string {
