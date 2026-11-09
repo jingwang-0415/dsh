@@ -83,6 +83,7 @@ function onRepoChange(): void {
   <section class="overview">
     <div class="pick">
       <label>仓库 <select v-model="repoId" @change="onRepoChange"><option v-for="r in repos" :key="r.id" :value="r.id">{{ r.id }}</option></select></label>
+      <button class="btn" @click="router.push('/repos')">仓库管理</button>
     </div>
     <div class="banner" :class="bannerClass()">{{ bannerText() }}</div>
     <p v-if="error" class="banner banner-red">加载失败：{{ error }}</p>
