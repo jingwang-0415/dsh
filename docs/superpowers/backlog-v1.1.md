@@ -111,3 +111,30 @@
 - Repos 行内编辑 Enter 保存（@keyup.enter）；编辑中切行丢弃输入提示；.url-cell 灰化仅编辑态
 - branchExclude:[] 重置路径显式断言；DB upsert try/catch 收编 typed 500 模式
 - api.test compare 断言改精确 URL/URLSearchParams 解析（消 toContain 子串弱点）；RouterLink 统一对象式 :to
+
+---
+
+# v1.3.2 收官附录（2026-11-09，传输兜底 + 手动同步 + 深色模式对比度）
+
+## 已交付
+
+- 按仓传输兜底：bypassGitConfig（GIT_CONFIG_GLOBAL/SYSTEM=/dev/null 直连）+ httpProxy 三分支语义（undefined=跟随系统/''=强制无代理/非空=显式代理）——解决内源代理劫持 git 全局配置的场景（劫持 fixture 对照组实证）
+- **Critical 修复**：超时 kill 留孤儿孙进程持管道 → 'close' 永不触发 → 调度器互斥永久卡死（线上活体实锤）——kill 整树 + 销毁五流强制 close，复现测试确定性锁定
+- POST /api/repos/:id/sync 手动同步端点 + Overview"立即同步"按钮（互斥安全 skipped、四分支横幅）
+- 传输设置 UI：表单/行内编辑"传输（高级）"区 + 表格传输标记（三分支载荷构造 transportFields 单点封装）
+- 深色模式对比度：.btn 根因（1.4:1→12.9:1）、表单控件、9 badge/banner 变体、行系/链接/分隔线全量显式配色
+- README 传输兜底与手动同步用法段（含 '' 断连警示、bypass 边界、credential 提醒）
+
+## v1.4 池（v1.3.2 新增汇总）
+
+- 代理模式三态下拉（跟随系统/强制直连/自定义代理——一并解决 PATCH 棱角、表格 '—' 合流、undefined→'' 迁移）
+- 切仓横幅守卫（await 前存 target 落横幅前比对）；Overview 测试补抛错红/无新提交灰/切仓清三分支
+- 进程组 kill（孤儿清剿终态）；runGit input 路径 stdin 销毁对称；syncButton 非空断言工效学
+- reposapi 文件级 cleanupTracked（顺修既有同款）；POST /sync 上限或异步任务化；GIT_CONFIG_NUL Windows 脚注
+- RouterLink 对象式 :to 统一（消 toContain 子串弱点）；Enter 保存；v1.0 carry 三项（classifyChange/limit clamp/凭证脱敏）
+
+## 流程备注
+
+- review-package 打包脚本注明实际提交数（squash 包含表述与多提交历史不符，两次复审者被误导）
+- task-brief 预生成固定为派发前动作（本周期两次遗漏）
+- 需求映射表显式处置未决 carry（勿静默滚存）
