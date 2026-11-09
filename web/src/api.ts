@@ -131,7 +131,9 @@ export const api = {
   addRepo: (body: RepoConfigDto): Promise<RepoDto> => sendJson('/api/repos', 'POST', body),
   // id 进路径：encodeURIComponent 纪律（与 withRepo 查询串转义同源）
   removeRepo: (id: string): Promise<{ ok: true }> => sendJson(`/api/repos/${encodeURIComponent(id)}`, 'DELETE'),
-  // 行内编辑（v1.3.1）：PATCH 成功返回与 GET /api/repos 行同形的五字段；错误走 sendJson 通道
+  // 行内编辑（v1.3.1，v1.3.2 扩至七字段）：PATCH 成功返回与 GET /api/repos 行同形的七字段行
+  // （id/url/defaultBranch/branchExclude/pollIntervalSeconds/bypassGitConfig/httpProxy，
+  // httpProxy 未设时 JSON 省键）；错误走 sendJson 通道
   // message 优先、code 兜底（400 invalid 透传校验详情 / 500 config_write_failed）
   updateRepo: (id: string, patch: RepoPatchDto): Promise<RepoDto> =>
     sendJson(`/api/repos/${encodeURIComponent(id)}`, 'PATCH', patch),

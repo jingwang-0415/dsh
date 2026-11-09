@@ -155,6 +155,32 @@ describe('mirror 传输兜底（真实 git 行为）', () => {
     } finally { await close() }
   })
 
+  it('劫持下 fetchMirror：无兜底被代理打断；bypassGitConfig 直连恢复（fetch 侧直测）', async () => {
+    // clone 全链已有劫持用例（上）；fetch 走同款 env 变换机制，此处补直测缺口：
+    // 对照组证明 fetch 真实接触远端（否则无兜底不会失败），bypass 后同一镜像 fetch 恢复
+    const hijack = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-tp-hjf-'))), 'gitconfig')
+    writeFileSync(hijack, '[http]\n\tproxy = http://127.0.0.1:9\n')
+    const { url, close } = await makeHttpOrigin('gsm-tp-hjf-')
+    try {
+      const dir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-tp-hjf-m-'))), 'm.git')
+      await withProxyEnvCleared(async () => {
+        await ensureMirror(url, dir)   // 无劫持：正常克隆建立基线
+        const savedGlobal = process.env.GIT_CONFIG_GLOBAL
+        process.env.GIT_CONFIG_GLOBAL = hijack
+        try {
+          // 对照组：不带兜底 → fetch 被劫持代理打断
+          await expect(fetchMirror(dir))
+            .rejects.toThrow(/unable to access|Failed to connect|refused|拒绝|resolve|解析/i)
+          // bypassGitConfig：GIT_CONFIG_GLOBAL/SYSTEM=/dev/null → fetch 直连恢复
+          await fetchMirror(dir, { bypassGitConfig: true })
+        } finally {
+          if (savedGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL
+          else process.env.GIT_CONFIG_GLOBAL = savedGlobal
+        }
+      })
+    } finally { await close() }
+  })
+
   it('httpProxy 显式代理在 fetch 上真实生效（-c 前缀到达 spawn 并改变 git 行为）', async () => {
     const { url, close } = await makeHttpOrigin('gsm-tp-fx-')
     try {
