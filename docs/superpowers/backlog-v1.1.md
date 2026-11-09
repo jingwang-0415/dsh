@@ -94,3 +94,20 @@
 ## 流程备注
 
 - v1.3 全程无 Critical/Important 逃逸到合并；最终 scoped 审查抓到的 C1（设计正则未考虑路径专名）与 I1（min(1)×UI 删除交互未审视）均属计划层缺陷，gate 前修复
+
+---
+
+# v1.3.1 收官附录（2026-11-09，轮询间隔运行时可调）
+
+## 已交付
+
+- PATCH /api/repos/:id：轮询间隔/默认分支/排除 glob 运行时原位变更（引用语义即时生效）+ 原子回写 + 回滚纪律
+- /repos 视图行内编辑（URL 只读明示、前端先行校验、错误横幅 message 优先）
+- 轮询间隔上界 604800 秒（7 天，三处同阈值：config zod .max / PATCH 手写校验 / 前端本地拦截——防 setTimeout 1ms 钳制紧循环）
+- README 运行时可调说明补交付
+
+## v1.4 候选（本周期新增，Enter-to-save 优先）
+
+- Repos 行内编辑 Enter 保存（@keyup.enter）；编辑中切行丢弃输入提示；.url-cell 灰化仅编辑态
+- branchExclude:[] 重置路径显式断言；DB upsert try/catch 收编 typed 500 模式
+- api.test compare 断言改精确 URL/URLSearchParams 解析（消 toContain 子串弱点）；RouterLink 统一对象式 :to
