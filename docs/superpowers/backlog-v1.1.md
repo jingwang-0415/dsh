@@ -69,3 +69,28 @@
 - ✅ "Compare 视图 repo 作用域成套接通"——v1.2-T1 已解决（合并时验证：Compare 下拉/作用域调用/查询持久化/徽标带 repo/跨仓直链/CommitDetail 读 ?repo= 全部落地并受测试锁定）
 - ✅ 测试临时目录卫生——v1.2-T4 trackTmp/cleanupTracked 全覆盖（53/53 调用点，零残留探针通过）
 - ✅ SSE 心跳——v1.2-T4 惰性 25s（真实实例 31s 探针实测 1 次）
+
+---
+
+# v1.3 收官附录（2026-11-09，仓库管理界面）
+
+## 已交付
+
+- 界面直接配置仓库：/repos 管理视图（列表/添加/删除/状态徽标）+ Overview 入口
+- POST/DELETE /api/repos：原子回写 config.json（唯一真源）、免重启 Scheduler 构建/停止、DB 历史保留（同 id 重挂接续）
+- C1 封死：repo id 拒绝 `.`/`..`（数据目录删除链——mirrorDirFor 归一化 + CORRUPT_RE rmSync 的组合逃逸），前后端同款校验
+- I1 保底：DELETE 最后一个仓 → 409 last_repo（防 repos:[] 重启崩溃）
+- GET /api/repos 暴露 branchExclude（UI 可见性）
+
+## carry（v1.4 候选）
+
+- repos upsert SQL 双份抽公共（api.ts/app.ts 注释互锚）
+- upsert 后抛错的 typed 500 模式补全（近不可能场景）
+- configOverride 缺 configPath 强制成对/派生临时路径
+- 单仓部署换仓需"先加后删"的操作顺序写进 README
+- 大小写不敏感 FS 上 r1/R1 镜像目录碰撞（可选 lowercase 规范化）
+- DELETE 不 join 在飞 runOnce 的语义文档化（README）
+
+## 流程备注
+
+- v1.3 全程无 Critical/Important 逃逸到合并；最终 scoped 审查抓到的 C1（设计正则未考虑路径专名）与 I1（min(1)×UI 删除交互未审视）均属计划层缺陷，gate 前修复
