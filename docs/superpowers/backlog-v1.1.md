@@ -44,3 +44,28 @@
 ## v1.1 裁定存档（摘要）
 
 - patch-id 空匹配=合法空集；同秒 SHA 碰撞先例贯穿 v1.1 三处测试；include 行为测试与 HTTP→引擎缝断言 uplift 合并前必修（已完成）；matchedPairs 排序回写 spec（时间倒序）；文档字面三处回写随修复批落地
+
+---
+
+# v1.2 收官附录（2026-11-09，main@fcb0feb）
+
+## v1.3 池（最终 scoped 审查裁定，按优先级）
+
+1. **classifyChange exitCode 区分**（v1.3 首位，两个周期 carry 已够）：refDiff.ts 把基础设施故障（超时/ENOENT）归为 force-push，且 force-push 路径不插入提交 → 这些提交在 head 再次前进前永久漏报
+2. /api/commits limit 上限 clamp（一行）
+3. gitRunner 凭证脱敏（url 内嵌 token 会进 fetch_events/UI，两行）
+4. sse.ts publish/sweep 尾部补 stopHeartbeatIfIdle（两行，闭环心跳停表）
+5. RouterLink 改对象式 `:to`（顺带补 api.test toContain 子串弱断言）；Compare 切仓 requestId 时序守卫；SHOW_BATCH 导出；afterAll try/finally；vue-tsc 门翻出的 branches.updated fixture 补齐
+6. spec §8 503/since 回写
+
+## 流程备注（下批修正）
+
+- task-brief 预生成漏了两次（T2/T4）——派发步骤加"简报生成"固定动作
+- review-package 的"squash 包含"表述与多提交历史不符——打包脚本注明实际提交数
+- 需求映射表应显式处置未决的 v1.0 carry（勿静默滚存）
+
+## 已解决标注
+
+- ✅ "Compare 视图 repo 作用域成套接通"——v1.2-T1 已解决（合并时验证：Compare 下拉/作用域调用/查询持久化/徽标带 repo/跨仓直链/CommitDetail 读 ?repo= 全部落地并受测试锁定）
+- ✅ 测试临时目录卫生——v1.2-T4 trackTmp/cleanupTracked 全覆盖（53/53 调用点，零残留探针通过）
+- ✅ SSE 心跳——v1.2-T4 惰性 25s（真实实例 31s 探针实测 1 次）
