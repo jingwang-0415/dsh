@@ -68,7 +68,8 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
   })
 
   app.get('/api/repos', async () =>
-    // branchExclude 与传输兜底两字段一并暴露：UI 配置的排除 glob/直连/代理需可回读查看
+    // branchExclude 与传输兜底两字段一并暴露：UI 配置的排除 glob/直连/代理需可回读查看；
+    // httpProxy 未设时 undefined → JSON 省键（fix round 1 三分支语义：未设=跟随系统 git 配置）
     config.repos.map(({ id, url, defaultBranch, branchExclude, pollIntervalSeconds, bypassGitConfig, httpProxy }) =>
       ({ id, url, defaultBranch, branchExclude, pollIntervalSeconds, bypassGitConfig, httpProxy })
     )
@@ -185,7 +186,8 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
       }
     }
     if (body.httpProxy !== undefined) {
-      // 空串合法 = 强制无代理（显式覆盖劫持的全局代理），与 repoSchema z.string() 同阈值
+      // 空串合法 = 强制无代理（显式覆盖劫持的全局代理），与 repoSchema z.string() 同阈值；
+      // 键缺省走不到这里（undefined 不落对象，"未设=跟随系统"语义得以保留）
       if (typeof body.httpProxy === 'string') {
         patch.httpProxy = body.httpProxy
       } else {

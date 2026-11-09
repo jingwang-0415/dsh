@@ -74,13 +74,13 @@ describe('仓库生命周期 API（真实 config 文件 fixture）', () => {
 
     const list = await handle.app.inject({ method: 'GET', url: '/api/repos' })
     expect(list.json().map((r: { id: string }) => r.id)).toEqual(['r1', 'r2', 'beta'])
-    // GET /api/repos 契约：七个字段（branchExclude 与 v1.3.2 的 bypassGitConfig/httpProxy
-    // 均需 UI 可见可回读）
+    // GET /api/repos 契约（fix round 1）：基础六键恒在（含 branchExclude 与 bypassGitConfig
+    // default false）；httpProxy 仅显式设置时出现——undefined → JSON 省键（未设=跟随系统 git 配置）
     for (const row of list.json()) {
-      expect(Object.keys(row)).toEqual([
-        'id', 'url', 'defaultBranch', 'branchExclude', 'pollIntervalSeconds',
-        'bypassGitConfig', 'httpProxy'
+      expect(Object.keys(row).filter(k => k !== 'httpProxy')).toEqual([
+        'id', 'url', 'defaultBranch', 'branchExclude', 'pollIntervalSeconds', 'bypassGitConfig'
       ])
+      expect('httpProxy' in row).toBe(row.httpProxy !== undefined)
     }
     expect(handle.schedulers.length).toBe(before + 1)
 
@@ -211,6 +211,37 @@ describe('仓库生命周期 API（真实 config 文件 fixture）', () => {
     const del = await handle.app.inject({ method: 'DELETE', url: '/api/repos/gamma' })
     expect(del.statusCode).toBe(200)
   })
+
+  it('POST 未设 httpProxy → 201/GET 省键（未设=跟随系统）；POST 显式 \'\' → 回显空串（强制无代理）', async () => {
+    // fix round 1 三分支语义经 API 全链路：
+    // 1) 未设：POST body 不带 httpProxy → 响应/GET 行/config.json 均省键（存量语义）
+    const bare = await handle.app.inject({
+      method: 'POST', url: '/api/repos', payload: { id: 'delta', url: o3.dir }
+    })
+    expect(bare.statusCode).toBe(201)
+    expect('httpProxy' in bare.json()).toBe(false)
+    expect(bare.json().bypassGitConfig).toBe(false)   // opt-in 字段 default false 显式存在
+
+    // 2) 显式空串：键存在且值为 '' —— 强制无代理语义经 API 可达
+    const forced = await handle.app.inject({
+      method: 'POST', url: '/api/repos', payload: { id: 'epsilon', url: o3.dir, httpProxy: '' }
+    })
+    expect(forced.statusCode).toBe(201)
+    expect(forced.json()).toMatchObject({ id: 'epsilon', httpProxy: '' })
+
+    const list = await handle.app.inject({ method: 'GET', url: '/api/repos' })
+    expect('httpProxy' in list.json().find((r: { id: string }) => r.id === 'delta')).toBe(false)
+    expect(list.json().find((r: { id: string }) => r.id === 'epsilon')).toMatchObject({ httpProxy: '' })
+    const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as { repos: { id: string }[] }
+    expect('httpProxy' in cfg.repos.find(r => r.id === 'delta')!).toBe(false)
+    expect('httpProxy' in cfg.repos.find(r => r.id === 'epsilon')!).toBe(true)
+
+    // 清理：等首跑落定再删（close 时无在飞 runOnce）
+    await awaitSettled('delta')
+    await awaitSettled('epsilon')
+    expect((await handle.app.inject({ method: 'DELETE', url: '/api/repos/delta' })).statusCode).toBe(200)
+    expect((await handle.app.inject({ method: 'DELETE', url: '/api/repos/epsilon' })).statusCode).toBe(200)
+  })
 })
 
 describe('DELETE 最后一个仓（configSchema repos min(1) 保底）', () => {
@@ -330,10 +361,10 @@ describe('PATCH /api/repos/:id（运行时调整轮询间隔与分支属性，�
       payload: { pollIntervalSeconds: 7, defaultBranch: 'main', branchExclude: ['tmp/**'] }
     })
     expect(res.statusCode).toBe(200)
-    // 返回形状与 GET /api/repos 行一致（五个可变字段 + 两个传输兜底字段）
+    // 返回形状与 GET /api/repos 行一致；p1 从未显式设过 httpProxy → undefined → JSON 省键
     expect(res.json()).toEqual({
       id: 'p1', url: o.dir, defaultBranch: 'main', branchExclude: ['tmp/**'], pollIntervalSeconds: 7,
-      bypassGitConfig: false, httpProxy: ''
+      bypassGitConfig: false
     })
 
     // 原位变更锁：config.repos 中仍是同一对象引用——Scheduler.deps.repo 持同引用，
@@ -343,11 +374,12 @@ describe('PATCH /api/repos/:id（运行时调整轮询间隔与分支属性，�
     expect(repoRef!.defaultBranch).toBe('main')
     expect(repoRef!.branchExclude).toEqual(['tmp/**'])
     expect(repoRef!.url).toBe(o.dir)
+    expect('httpProxy' in repoRef!).toBe(false)   // PATCH 未提供的键不落对象（未设语义保留）
 
-    // config 文件回写：新三字段 + 传输兜底默认值 + url/id 未变
+    // config 文件回写：新三字段 + bypassGitConfig default + url/id 未变；httpProxy 省键
     expect(onDiskRepo()).toEqual({
       id: 'p1', url: o.dir, defaultBranch: 'main', branchExclude: ['tmp/**'], pollIntervalSeconds: 7,
-      bypassGitConfig: false, httpProxy: ''
+      bypassGitConfig: false
     })
 
     // DB repos 行 default_branch 同步（readonly 断言）。
@@ -372,11 +404,11 @@ describe('PATCH /api/repos/:id（运行时调整轮询间隔与分支属性，�
     expect(repoRef.pollIntervalSeconds).toBe(11)
     expect(handle.config.repos[0]).toBe(repoRef)
 
-    // GET /api/repos（读 config）与磁盘文件都反映最新值
+    // GET /api/repos（读 config）与磁盘文件都反映最新值；httpProxy 未显式设置 → 省键
     const list = await handle.app.inject({ method: 'GET', url: '/api/repos' })
     expect(list.json()[0]).toEqual({
       id: 'p1', url: o.dir, defaultBranch: 'main', branchExclude: ['tmp/**'], pollIntervalSeconds: 11,
-      bypassGitConfig: false, httpProxy: ''
+      bypassGitConfig: false
     })
     expect(onDiskRepo().pollIntervalSeconds).toBe(11)
   })

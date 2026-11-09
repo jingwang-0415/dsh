@@ -5,11 +5,28 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
 
 afterEach(cleanupTracked)
 import { ensureMirror, fetchMirror, snapshotRefs, transportArgs } from '../src/mirror.js'
+import { loadConfig } from '../src/config.js'
+
+// spawn 捕获桩：vi.spyOn 在本 vitest v3/ESM 环境对 node 内建模块不可行
+// （TypeError: Module namespace is not configurable / Cannot redefine property，已实证），
+// 改用 importOriginal 透传包装——捕获真实 spawn 的 (bin, args, opts) 且执行行为逐字节不变。
+const spawnCalls = vi.hoisted(() => [] as Array<[string, string[], Record<string, unknown> | undefined]>)
+vi.mock('node:child_process', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return {
+    ...actual,
+    spawn: ((...args: Parameters<typeof actual.spawn>) => {
+      const [bin, cmdArgs, opts] = args
+      spawnCalls.push([bin, cmdArgs as string[], opts as Record<string, unknown> | undefined])
+      return actual.spawn(...args)
+    }) as typeof actual.spawn
+  }
+})
 
 describe('mirror', () => {
   it('ensureMirror 首次克隆，二次复用', async () => {
@@ -41,17 +58,18 @@ describe('mirror', () => {
 // clone 与 fetch；`-c http.proxy=`（空串）可覆盖全局配置恢复直连；no_proxy 等环境变量
 // 会遮蔽代理行为，故劫持用例显式清空代理环境变量保证确定性（离线、无 DNS 依赖）。
 
-describe('transportArgs（纯函数）', () => {
-  it('httpProxy 显式 → -c http.proxy/https.proxy 对；空串同形态（强制无代理）', () => {
+describe('transportArgs（纯函数，fix round 1 三分支语义）', () => {
+  it('httpProxy 非空 → 带值 -c 对；\'\' → 空 -c 对（强制无代理）', () => {
     expect(transportArgs({ httpProxy: 'http://p:1' })).toEqual([
       '-c', 'http.proxy=http://p:1', '-c', 'https.proxy=http://p:1'
     ])
     expect(transportArgs({ httpProxy: '' })).toEqual(['-c', 'http.proxy=', '-c', 'https.proxy='])
   })
 
-  it('仅 bypass（走 env）或空 opts → 不产生 args', () => {
+  it('httpProxy 未设（undefined=跟随系统 git 配置）或仅 bypass → 不产生 args（bypass 走 env）', () => {
     expect(transportArgs({})).toEqual([])
     expect(transportArgs({ bypassGitConfig: true })).toEqual([])
+    expect(transportArgs({ bypassGitConfig: true, httpProxy: undefined })).toEqual([])
   })
 })
 
@@ -147,5 +165,46 @@ describe('mirror 传输兜底（真实 git 行为）', () => {
           .rejects.toThrow(/unable to access|Failed to connect|refused|拒绝|resolve|解析/i)
       })
     } finally { await close() }
+  })
+
+  it('存量配置不变性：config 无 httpProxy 键 → loadConfig 后 spawn 无 -c 前缀且无 env 覆盖', async () => {
+    // fix round 1：手写 v1.3.1 形态 config.json（无传输字段）——未设语义必须逐字节保留
+    const cfgDir = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-tp-legacy-')))
+    const cfgFile = join(cfgDir, 'config.json')
+    writeFileSync(cfgFile, JSON.stringify({ repos: [{ id: 'legacy', url: 'file:///tmp/unused' }] }))
+    const repo = loadConfig(cfgFile).repos[0]
+    expect(repo.httpProxy).toBeUndefined()
+    expect('httpProxy' in repo).toBe(false)
+
+    const origin = createOriginRepo('gsm-tp-lg-')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-tp-lg-m-'))), 'm.git')
+    // 与 scheduler runOnce 同构造：字段可能为 undefined，由 transportArgs 分支消化
+    const transport = { bypassGitConfig: repo.bypassGitConfig, httpProxy: repo.httpProxy }
+    spawnCalls.length = 0
+    await ensureMirror(origin.dir, mirrorDir, transport)
+    await fetchMirror(mirrorDir, transport)
+    const gitCalls = spawnCalls.filter(([bin]) => bin === 'git')
+    expect(gitCalls).toHaveLength(2)   // clone + fetch 真实执行
+    for (const [, args, opts] of gitCalls) {
+      expect(args).not.toContain('-c')                          // 未设 → 无任何代理参数注入
+      expect(opts != null && 'env' in opts).toBe(false)         // 未开 bypass → 无 env 覆盖键
+    }
+  })
+
+  it('显式空串：config 带 "httpProxy": "" → spawn args 含空 -c 对（强制无代理语义可达）', async () => {
+    const cfgDir = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-tp-emptycfg-')))
+    const cfgFile = join(cfgDir, 'config.json')
+    writeFileSync(cfgFile, JSON.stringify({ repos: [{ id: 'force', url: 'file:///tmp/unused', httpProxy: '' }] }))
+    const repo = loadConfig(cfgFile).repos[0]
+    expect(repo.httpProxy).toBe('')
+
+    const origin = createOriginRepo('gsm-tp-ec-')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-tp-ec-m-'))), 'm.git')
+    spawnCalls.length = 0
+    await ensureMirror(origin.dir, mirrorDir, { bypassGitConfig: repo.bypassGitConfig, httpProxy: repo.httpProxy })
+    const gitCalls = spawnCalls.filter(([bin]) => bin === 'git')
+    expect(gitCalls).toHaveLength(1)
+    expect(gitCalls[0][1].slice(0, 4)).toEqual(['-c', 'http.proxy=', '-c', 'https.proxy='])
+    expect(gitCalls[0][2] != null && 'env' in gitCalls[0][2]).toBe(false)   // bypass 未开 → 无 env 覆盖
   })
 })

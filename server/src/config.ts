@@ -22,10 +22,14 @@ export const repoSchema = z.object({
   defaultBranch: z.string().min(1).default('master'),
   branchExclude: z.array(z.string()).default([]),
   pollIntervalSeconds: z.number().int().min(5).max(MAX_POLL_INTERVAL_SECONDS, '轮询间隔上限 604800 秒（7 天）').default(30),
-  // 按仓传输兜底（v1.3.2）：缺省 false/'' 即不兜底，既有配置文件解析后行为不变。
-  // httpProxy '' 是合法显式值（强制无代理），故用 default('') 而非 optional
+  // 按仓传输兜底（v1.3.2，fix round 1 三分支语义）：
+  // - bypassGitConfig 缺省 false（opt-in，不兜底）
+  // - httpProxy 缺省 undefined = 跟随系统/全局 git 配置（不注入任何 -c 代理参数，
+  //   存量仓行为逐字节不变）；'' = 显式强制无代理；非空 = 显式代理覆盖。
+  //   未设与显式空串必须区分：default('') 会让存量仓被静默强制无代理
+  //   （-c http.proxy= 同时压制全局配置代理与 env 代理，依赖内网代理的仓升级即断连）
   bypassGitConfig: z.boolean().default(false),
-  httpProxy: z.string().default('')
+  httpProxy: z.string().optional()
 })
 
 const configSchema = z.object({
