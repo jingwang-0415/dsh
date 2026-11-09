@@ -1,10 +1,11 @@
 import { mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { createOriginRepo } from './fixture.js'
 import { ensureMirror } from '../src/mirror.js'
-import { crossCompare, mergePatchMaps } from '../src/crossrepo.js'
+import { crossCompare, mergePatchMaps, showCommits } from '../src/crossrepo.js'
 import type { Fingerprint } from '../src/patchid.js'
 
 const f = (patchId: string, sha: string): Fingerprint => ({ patchId, sha })
@@ -60,5 +61,29 @@ describe('crossCompare（真实 git 独立双仓）', () => {
     await ensureMirror(b.dir, mb)
     const r = await crossCompare(ma, 'dev', mb, 'master', [], ['vendor/**'])
     expect(r.onlyInA).toHaveLength(0) // vendor 改动被排除，A 无其他独有补丁
+  })
+})
+
+describe('showCommits 分批（真实 git）', () => {
+  it('201 个 sha（跨 SHOW_BATCH=200 边界）：输入顺序完整拼接不丢不重', async () => {
+    const origin = createOriginRepo('gsm-cb-')
+    // fast-import 单进程构造 201 个提交（探针实证：逐个 commit 约 26ms×201 会超 vitest 默认 5s）
+    const lines = ['commit refs/heads/batch', 'mark :1', 'committer T <t@e.c> 1700000000 +0000', 'data 4', 'root', '']
+    for (let i = 1; i <= 201; i++) {
+      lines.push('commit refs/heads/batch', `mark :${i + 1}`, 'committer T <t@e.c> 1700000000 +0000', 'data 4', `t${String(i).padStart(3, '0')}`, `from :${i}`, '')
+    }
+    const fi = spawnSync('git', ['fast-import', '--quiet'], { cwd: origin.dir, input: lines.join('\n'), encoding: 'utf8' })
+    expect(fi.status).toBe(0)
+    const revList = spawnSync('git', ['rev-list', 'refs/heads/batch'], { cwd: origin.dir, encoding: 'utf8' })
+    const all = revList.stdout.trim().split('\n')
+    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-cb-m-')), 'm.git')
+    await ensureMirror(origin.dir, mirrorDir)
+    // 乱序输入（非提交序）→ 断言结果与输入数组完全一致（分批拼接保持输入顺序）
+    const shas = all.slice(0, 201).reverse()
+    const result = await showCommits(mirrorDir, shas)
+    expect(result.map(c => c.sha)).toEqual(shas)
+    expect(result).toHaveLength(201)
+    expect(new Set(result.map(c => c.sha)).size).toBe(201)
+    expect(result.find(c => c.subject === 't201')).toBeTruthy()
   })
 })

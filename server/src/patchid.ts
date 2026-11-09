@@ -1,4 +1,4 @@
-import { runGit } from './gitRunner.js'
+import { pipeRunGit } from './gitRunner.js'
 
 export interface Fingerprint { patchId: string; sha: string }
 
@@ -25,7 +25,7 @@ export async function branchFingerprints(
   mirrorDir: string, branch: string, pathspecs: string[]
 ): Promise<Fingerprint[]> {
   const args = ['log', `refs/heads/${branch}`, '-p', '--no-merges', '--pretty=format:%H', ...pathspecs]
-  const { stdout: patchText } = await runGit(mirrorDir, args)
-  const { stdout: idText } = await runGit(mirrorDir, ['patch-id', '--stable'], { input: patchText })
+  // 双进程 stdout→stdin 直连：补丁文本不再整段驻留内存（大仓化）
+  const { stdout: idText } = await pipeRunGit(mirrorDir, args, mirrorDir, ['patch-id', '--stable'])
   return parsePatchIds(idText)
 }

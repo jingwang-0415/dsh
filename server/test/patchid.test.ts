@@ -98,4 +98,18 @@ describe('branchFingerprints（真实 git，独立双仓）', () => {
     const r = await runGit(mirrorDir, ['patch-id', '--stable'], { input: diff })
     expect(r.stdout.trim().endsWith(head)).toBe(true)
   })
+
+  it('流式等价性回归锁：branchFingerprints 与 v1.1 两段式结果逐条相等（多提交分支）', async () => {
+    const origin = createOriginRepo('gsm-pf-')
+    origin.git(['checkout', '-b', 'multi'])
+    for (let i = 1; i <= 5; i++) origin.commitFile(`m${i}.txt`, `content ${i}\n`)
+    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-pf-m-')), 'm.git')
+    await ensureMirror(origin.dir, mirrorDir)
+    const fps = await branchFingerprints(mirrorDir, 'multi', [])
+    // 期望值按 v1.1 实现独立复算：整段 log -p 文本（spawnSync input）喂 patch-id --stable
+    const patchText = runGitSync(mirrorDir, ['log', 'refs/heads/multi', '-p', '--no-merges', '--pretty=format:%H'])
+    const idText = spawnSync('git', ['patch-id', '--stable'], { cwd: mirrorDir, input: patchText, encoding: 'utf8' }).stdout
+    expect(fps).toEqual(parsePatchIds(idText))
+    expect(fps.length).toBe(6) // README 根提交 + 5 个新提交
+  })
 })
