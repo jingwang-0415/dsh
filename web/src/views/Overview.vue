@@ -43,8 +43,10 @@ onMounted(async () => {
     onBranchesUpdated: () => void refresh(),
     onStatus: s => {
       // 只认当前选中仓的 status 推送：其余仓的调度状态不覆写本页横幅；
-      // 初始 refresh 失败时 status 恒为 null，借 SSE 推送触发一次重新拉取完成自愈
-      if (status.value && s.repoId === repoId.value) { status.value = s } else { void refresh() }
+      // 初始 refresh 失败时 status 恒为 null，借 SSE 推送触发一次重新拉取完成自愈。
+      // SSE 载荷是 SchedulerStatus+repoId（无 mirrorDir/lastFetch），合并而非整体替换：
+      // 直接替换会把 mirrorDir/lastFetch 抹成 undefined，bannerClass 的 lastFetch 判断随之失效
+      if (status.value && s.repoId === repoId.value) { status.value = { ...status.value, ...s } } else { void refresh() }
     }
   })
 })

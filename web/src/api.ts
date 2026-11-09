@@ -119,7 +119,11 @@ export function formatFuture(ts: number, now = Date.now()): string {
 // v1.1-T1 起 SSE 载荷带 repoId（多仓）：commits.new 增字段，branches.updated/status.changed 增包
 export interface CommitsNewEvent { repoId: string; branch: string; count: number; subjects: string[] }
 export interface BranchesUpdatedEvent { repoId: string }
-export type StatusChangedEvent = StatusDto & { repoId: string }
+// status.changed 载荷 = server SchedulerStatus（server/src/scheduler.ts）+ repoId（app.ts publish 时并入），
+// 与 REST /api/status 的 StatusDto 相比无 mirrorDir/lastFetch——调度器推送不含镜像路径/最近 fetch 详情
+export type StatusChangedEvent = Pick<
+  StatusDto, 'state' | 'lastRunAt' | 'nextRunAt' | 'consecutiveFailures' | 'lastError' | 'lastNewCommits'
+> & { repoId: string }
 
 export interface EventHandlers {
   onCommitsNew?: (data: CommitsNewEvent) => void

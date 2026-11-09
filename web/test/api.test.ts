@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, connectEvents, formatFuture, formatRelative } from '../src/api.js'
+import { api, connectEvents, formatFuture, formatRelative, type CommitsNewEvent, type StatusChangedEvent } from '../src/api.js'
 
 describe('formatRelative', () => {
   const now = 1_700_000_000_000
@@ -73,9 +73,15 @@ describe('connectEvents', () => {
     connectEvents({ onCommitsNew, onStatus })
     const es = FakeEventSource.last!
     expect(es.url).toBe('/api/events')
-    es.emit('commits.new', { branch: 'master', count: 1 })
-    es.emit('status.changed', { state: 'idle' })
-    expect(onCommitsNew).toHaveBeenCalledWith({ branch: 'master', count: 1 })
-    expect(onStatus).toHaveBeenCalledWith({ state: 'idle' })
+    // fixture 以导出事件类型标注（真实载荷形状，含 repoId）：形状漂移时 typecheck 门直接报错
+    const commitsNew: CommitsNewEvent = { repoId: 'r1', branch: 'master', count: 1, subjects: ['feat: x'] }
+    const statusChanged: StatusChangedEvent = {
+      repoId: 'r1', state: 'idle', lastRunAt: null, nextRunAt: null,
+      consecutiveFailures: 0, lastError: null, lastNewCommits: null
+    }
+    es.emit('commits.new', commitsNew)
+    es.emit('status.changed', statusChanged)
+    expect(onCommitsNew).toHaveBeenCalledWith(commitsNew)
+    expect(onStatus).toHaveBeenCalledWith(statusChanged)
   })
 })
