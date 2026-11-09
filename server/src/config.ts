@@ -5,9 +5,14 @@ import { matchesGlob } from './util/glob.js'
 
 // 导出：POST /api/repos 复用同一校验契约（单仓校验不等同于整体 configSchema）。
 // id 白名单 ^[A-Za-z0-9._-]+$：id 同时是 mirror 目录名/API ?repo= 取值，
-// `../demo` 这类值会逃出 repos/ 根目录，必须在此源头封死
+// `../demo` 这类值会逃出 repos/ 根目录，必须在此源头封死。
+// 注意白名单正则会放行 '.' 与 '..'（审查 C1）：mirrorDirFor('..') = join(dataDir,'repos','..')
+// = dataDir 本身 → ensureMirror 见目录存在报 corrupt → rmSync 递归强删 = 清掉整个数据目录，
+// 故需 refine 显式拒绝
 export const repoSchema = z.object({
-  id: z.string().regex(/^[A-Za-z0-9._-]+$/, 'id 仅允许字母数字与 . _ -'),
+  id: z.string()
+    .regex(/^[A-Za-z0-9._-]+$/, 'id 仅允许字母数字与 . _ -')
+    .refine(id => id !== '.' && id !== '..', { message: 'id 不能为 . 或 ..' }),
   url: z.string().min(1),
   defaultBranch: z.string().min(1).default('master'),
   branchExclude: z.array(z.string()).default([]),

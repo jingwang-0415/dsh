@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -153,5 +153,54 @@ describe('仓库生命周期 API（真实 config 文件 fixture）', () => {
     const res = await handle.app.inject({ method: 'DELETE', url: '/api/repos/ghost' })
     expect(res.statusCode).toBe(404)
     expect(res.json()).toMatchObject({ code: 'repo_not_found' })
+  })
+
+  it('POST id 为 . 或 .. → 400 且数据目录原封不动（封死 mirrorDir 逃逸删除链）', async () => {
+    // 攻击链（审查 C1）：'..' 过白名单正则 → mirrorDirFor('..')=join(dataDir,'repos','..')=dataDir
+    // → ensureMirror 见目录存在返回 existing → snapshotRefs 报 not a git repository
+    // → 命中 CORRUPT_RE → rmSync(mirrorDir,recursive,force) = 删掉整个数据目录（db+config+全部镜像）
+    for (const id of ['..', '.']) {
+      const res = await handle.app.inject({ method: 'POST', url: '/api/repos', payload: { id, url: o3.dir } })
+      expect(res.statusCode).toBe(400)
+      expect(res.json()).toMatchObject({
+        code: 'invalid',
+        message: expect.stringContaining('不能为')
+      })
+      expect(existsSync(dataDir)).toBe(true)   // 修复前此断言点已被异步 rm -rf 掀掉
+    }
+  })
+})
+
+describe('DELETE 最后一个仓（configSchema repos min(1) 保底）', () => {
+  let o: ReturnType<typeof createOriginRepo>
+  let configPath: string
+  let handle: AppHandle
+
+  beforeAll(async () => {
+    o = createOriginRepo('gsm-rm-last-')
+    o.commitFile('only.txt', 'only')   // 同秒同内容 SHA 碰撞规避（multirepo 先例）
+    const dir = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-lastrepo-')))
+    configPath = join(dir, 'config.json')
+    writeFileSync(configPath, JSON.stringify({ repos: [{ id: 'only', url: o.dir }] }))
+    handle = await buildApp({
+      configPath,
+      dataDir: trackTmp(mkdtempSync(join(tmpdir(), 'gsm-lastrepo-data-')))
+    })
+  })
+
+  // 只关停：临时目录由外层 describe 的 afterAll cleanupTracked 统一清理
+  afterAll(async () => { await handle.close() })
+
+  it('DELETE 唯一仓 → 409 last_repo，config 文件未改动且 scheduler 不动', async () => {
+    const before = handle.schedulers.length
+    const res = await handle.app.inject({ method: 'DELETE', url: '/api/repos/only' })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toMatchObject({ code: 'last_repo', message: '至少保留一个仓库' })
+
+    // 磁盘 repos:[] 会让重启 loadConfig 直接抛错（index.ts 顶层 await 崩溃）——必须未改动
+    const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as { repos: { id: string }[] }
+    expect(cfg.repos.map(r => r.id)).toEqual(['only'])
+    expect(handle.schedulers.length).toBe(before)
+    expect(handle.schedulers[0].repoId).toBe('only')
   })
 })

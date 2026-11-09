@@ -106,6 +106,11 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
     const { id } = req.params as { id: string }
     const i = config.repos.findIndex(r => r.id === id)
     if (i === -1) return reply.code(404).send({ code: 'repo_not_found' })
+    // configSchema repos min(1) 的运行时保底（审查 I1）：删掉唯一仓会落盘 repos:[]，
+    // 重启时 loadConfig 直接抛错、index.ts 顶层 await 崩溃，只能手编 config 救活
+    if (config.repos.length === 1) {
+      return reply.code(409).send({ code: 'last_repo', message: '至少保留一个仓库' })
+    }
     const [removed] = config.repos.splice(i, 1)
     try {
       writeConfig(deps.configPath, config)

@@ -18,6 +18,9 @@ const formExclude = ref('')
 const ID_RE = /^[A-Za-z0-9._-]+$/
 
 function validate(): string {
+  // '.'/'..' 过白名单正则但 mirrorDir 会逃逸出 repos/（服务端 repoSchema 同款 refine），
+  // 前端先行拦住；服务端仍是唯一裁决
+  if (formId.value === '.' || formId.value === '..') return 'id 不能为 . 或 ..'
   if (!ID_RE.test(formId.value)) return 'id 仅允许字母数字与 . _ -'
   if (!formUrl.value.trim()) return 'url 不能为空'
   if (formInterval.value.trim()) {

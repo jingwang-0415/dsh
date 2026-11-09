@@ -107,6 +107,11 @@ describe('Repos 视图（仓库管理）', () => {
     await add()
     expect(wrapper.find('.banner-red').text()).toContain('id 仅允许字母数字与 . _ -')
 
+    // 审查 C1：'..'/'.' 过白名单正则，但服务端 mirrorDir 会逃逸 → 前端同款先行拦截
+    await id().setValue('..')
+    await add()
+    expect(wrapper.find('.banner-red').text()).toContain('id 不能为')
+
     await id().setValue('beta')
     await url().setValue('')
     await add()

@@ -47,6 +47,13 @@ describe('loadConfig', () => {
         .toThrow(/id 仅允许字母数字与 \. _ -/)
     }
   })
+  it('repo id 为 . 或 .. 报错（refine 封死 mirror 目录逃逸删除链）', () => {
+    // '..' 过白名单正则但 mirrorDirFor 会把仓库目录解析到 repos/ 之外
+    for (const id of ['..', '.']) {
+      expect(() => loadConfig(writeConfig({ repos: [{ id, url: 'ssh://git@example.com/demo.git' }] })))
+        .toThrow(/id 不能为/)
+    }
+  })
 })
 
 describe('isBranchExcluded', () => {
