@@ -74,9 +74,9 @@ describe('仓库生命周期 API（真实 config 文件 fixture）', () => {
 
     const list = await handle.app.inject({ method: 'GET', url: '/api/repos' })
     expect(list.json().map((r: { id: string }) => r.id)).toEqual(['r1', 'r2', 'beta'])
-    // GET /api/repos 契约不变：仍只暴露这四个字段
+    // GET /api/repos 契约：五个字段（branchExclude 为审查搭车项——排除 glob 需 UI 可见）
     for (const row of list.json()) {
-      expect(Object.keys(row)).toEqual(['id', 'url', 'defaultBranch', 'pollIntervalSeconds'])
+      expect(Object.keys(row)).toEqual(['id', 'url', 'defaultBranch', 'branchExclude', 'pollIntervalSeconds'])
     }
     expect(handle.schedulers.length).toBe(before + 1)
 

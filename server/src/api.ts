@@ -68,7 +68,10 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
   })
 
   app.get('/api/repos', async () =>
-    config.repos.map(({ id, url, defaultBranch, pollIntervalSeconds }) => ({ id, url, defaultBranch, pollIntervalSeconds }))
+    // branchExclude 一并暴露：用户在 UI 配置的排除 glob 需可回读查看
+    config.repos.map(({ id, url, defaultBranch, branchExclude, pollIntervalSeconds }) =>
+      ({ id, url, defaultBranch, branchExclude, pollIntervalSeconds })
+    )
   )
 
   // —— 仓库生命周期：界面上直接配置仓库，免重启生效（v1.3 Task 1） ——

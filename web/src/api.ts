@@ -41,7 +41,8 @@ export interface CompareDto {
   behindCommits: CommitRow[]
 }
 
-export interface RepoDto { id: string; url: string; defaultBranch: string; pollIntervalSeconds: number }
+// GET /api/repos 响应行：branchExclude 为服务端回读字段（UI 配置的排除 glob 可见）
+export interface RepoDto { id: string; url: string; defaultBranch: string; branchExclude: string[]; pollIntervalSeconds: number }
 
 // v1.3 仓库生命周期：POST /api/repos 请求体。可选字段缺省 = 服务端 zod default（master/[]/30），
 // 前端按同款契约先行校验（id 白名单、url 非空）拦必败请求，服务端仍是唯一裁决
