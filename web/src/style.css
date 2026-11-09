@@ -50,6 +50,7 @@ a { color: #0969da; text-decoration: none; }
   body { background: #0d1117; color: #e6edf3; }
   .tbl, .row, .commit-body, .rows .row { background: #161b22; border-color: #30363d; }
   .tbl th { background: #161b22; }
+  .tbl th, .tbl td { border-color: #30363d; }
   .muted { color: #8b949e; }
   code { background: #21262d; }
   .nav a.router-link-active { background: #121d2f; }
@@ -59,15 +60,19 @@ a { color: #0969da; text-decoration: none; }
   .btn:hover { background: #30363d; }
 
   /* 表单控件：显式深色底/字/边框，避免 UA 行为不一致。
-     .repos 两条带更高特异性，用于压过 Repos.vue scoped 浅色边框（border: #d0d7de）；
+     带 .app/.repos 前缀的三条用更高特异性（0,3,1）压过 Repos.vue / CrossRepo.vue
+     scoped 的浅色边框（border: #d0d7de, 0,2,1）；
      :not([type="checkbox"]) 排除 UA 自绘的复选框。 */
   .pick select, textarea, input:not([type="checkbox"]),
+  .app .pick input:not([type="checkbox"]),
   .repos .add-form input:not([type="checkbox"]),
   .repos .tbl input:not([type="checkbox"]) {
     background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
   }
   .pick select:focus, textarea:focus, input:not([type="checkbox"]):focus,
-  .repos .add-form input:focus, .repos .tbl input:focus { border-color: #58a6ff; }
+  .app .pick input:not([type="checkbox"]):focus,
+  .repos .add-form input:not([type="checkbox"]):focus,
+  .repos .tbl input:not([type="checkbox"]):focus { border-color: #58a6ff; }
 
   /* 链接与错误文字：#0969da/#cf222e 在深底上仅 3.3–3.7:1，提亮至 GitHub 暗色系 */
   .nav a { color: #58a6ff; }
