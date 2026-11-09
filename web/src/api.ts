@@ -62,7 +62,7 @@ async function getJson<T>(url: string): Promise<T> {
 
 // 非 GET 请求共用：错误体为 { code, message? }——message 透传（400 校验详情/500 写失败），
 // 缺省回退 code（409 repo_exists 无 message），再缺退 HTTP 状态
-async function sendJson<T>(url: string, method: 'POST' | 'DELETE', body?: unknown): Promise<T> {
+async function sendJson<T>(url: string, method: 'POST' | 'PATCH' | 'DELETE', body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method,
     ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -119,7 +119,19 @@ export const api = {
   // 仓库生命周期（契约见 server/test/reposapi.test.ts）：201 返回全字段仓；400/409/500 抛 message/code
   addRepo: (body: RepoConfigDto): Promise<RepoDto> => sendJson('/api/repos', 'POST', body),
   // id 进路径：encodeURIComponent 纪律（与 withRepo 查询串转义同源）
-  removeRepo: (id: string): Promise<{ ok: true }> => sendJson(`/api/repos/${encodeURIComponent(id)}`, 'DELETE')
+  removeRepo: (id: string): Promise<{ ok: true }> => sendJson(`/api/repos/${encodeURIComponent(id)}`, 'DELETE'),
+  // 行内编辑（v1.3.1）：PATCH 成功返回与 GET /api/repos 行同形的五字段；错误走 sendJson 通道
+  // message 优先、code 兜底（400 invalid 透传校验详情 / 500 config_write_failed）
+  updateRepo: (id: string, patch: RepoPatchDto): Promise<RepoDto> =>
+    sendJson(`/api/repos/${encodeURIComponent(id)}`, 'PATCH', patch)
+}
+
+// v1.3.1 行内编辑：PATCH /api/repos/:id 请求体 = 三键白名单（契约见 server/test/reposapi.test.ts）。
+// url/id 是仓的身份键，服务端一票拒绝（url_immutable），前端载荷也绝不携带
+export interface RepoPatchDto {
+  pollIntervalSeconds?: number
+  defaultBranch?: string
+  branchExclude?: string[]
 }
 
 export function formatRelative(ts: number, now = Date.now()): string {

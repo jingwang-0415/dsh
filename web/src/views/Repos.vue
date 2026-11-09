@@ -85,6 +85,57 @@ function badge(r: RepoDto): { cls: string; text: string } {
   }
 }
 
+// v1.3.1 行内编辑：一次只允许一行进入编辑态（editingId 定位目标行）。
+// url/id 是仓的身份键不可改（编辑态只读展示 + title 提示），可编辑的只有
+// pollIntervalSeconds/defaultBranch/branchExclude 三键——与 PATCH 白名单契约一致
+const editingId = ref('')
+const editBranch = ref('')
+const editInterval = ref('')
+const editExclude = ref('')
+const URL_IMMUTABLE_HINT = 'url 不可修改，更换地址请删除后重新添加'
+
+function startEdit(r: RepoDto): void {
+  editingId.value = r.id
+  editBranch.value = r.defaultBranch
+  editInterval.value = String(r.pollIntervalSeconds)
+  editExclude.value = (r.branchExclude ?? []).join(',')
+  error.value = ''
+}
+
+function cancelEdit(): void {
+  editingId.value = ''
+  error.value = ''
+}
+
+// 前端先行校验同后端阈值（整数 ≥5 / 非空分支），拦掉必败请求；服务端仍是唯一裁决。
+// v-model 在 type=number 输入上会自动数值化（looseToNumber），故先 String() 归一再校验
+function validateEdit(): string {
+  const raw = String(editInterval.value).trim()
+  const n = Number(raw)
+  if (!raw || !Number.isInteger(n) || n < 5) return '轮询间隔须为不小于 5 的整数秒'
+  if (!editBranch.value.trim()) return '默认分支不能为空'
+  return ''
+}
+
+async function onSave(): Promise<void> {
+  const v = validateEdit()
+  if (v) { error.value = v; return }
+  try {
+    // 载荷仅三键白名单（无 url/id）；排除 glob 逗号拆分（与添加表单同款 filter(Boolean) 语义）
+    await api.updateRepo(editingId.value, {
+      pollIntervalSeconds: Number(String(editInterval.value).trim()),
+      defaultBranch: editBranch.value.trim(),
+      branchExclude: editExclude.value.split(',').map(s => s.trim()).filter(Boolean)
+    })
+    editingId.value = ''
+    error.value = ''
+    await refresh()
+  } catch (e) {
+    // 失败留在编辑态（横幅透出服务端 message），可改后重试或取消
+    error.value = (e as Error).message
+  }
+}
+
 onMounted(() => { void refresh() })
 </script>
 
@@ -104,16 +155,30 @@ onMounted(() => { void refresh() })
 
     <table class="tbl">
       <thead>
-        <tr><th>id</th><th>url</th><th>默认分支</th><th>轮询间隔</th><th>调度状态</th><th>操作</th></tr>
+        <tr><th>id</th><th>url</th><th>默认分支</th><th>轮询间隔</th><th>排除 glob</th><th>调度状态</th><th>操作</th></tr>
       </thead>
       <tbody>
         <tr v-for="r in repos" :key="r.id">
           <td><code>{{ r.id }}</code></td>
-          <td>{{ r.url }}</td>
-          <td>{{ r.defaultBranch }}</td>
-          <td>{{ r.pollIntervalSeconds }}s</td>
+          <!-- url 身份键不可改：编辑态保持只读文本 + title 提示，绝不渲染输入框 -->
+          <td class="url-cell" :title="editingId === r.id ? URL_IMMUTABLE_HINT : undefined">{{ r.url }}</td>
+          <td v-if="editingId === r.id"><input class="edit-branch" v-model="editBranch" /></td>
+          <td v-else>{{ r.defaultBranch }}</td>
+          <td v-if="editingId === r.id"><input class="edit-interval" v-model="editInterval" type="number" min="5" step="1" /></td>
+          <td v-else>{{ r.pollIntervalSeconds }}s</td>
+          <td v-if="editingId === r.id"><input class="edit-exclude" v-model="editExclude" /></td>
+          <td v-else class="muted">{{ r.branchExclude?.join(',') || '—' }}</td>
           <td><span class="badge" :class="badge(r).cls">{{ badge(r).text }}</span></td>
-          <td><button class="btn" @click="onRemove(r.id)">删除</button></td>
+          <td>
+            <template v-if="editingId === r.id">
+              <button class="btn" @click="onSave">保存</button>
+              <button class="btn" @click="cancelEdit">取消</button>
+            </template>
+            <template v-else>
+              <button class="btn" @click="startEdit(r)">编辑</button>
+              <button class="btn" @click="onRemove(r.id)">删除</button>
+            </template>
+          </td>
         </tr>
       </tbody>
     </table>
@@ -126,4 +191,7 @@ onMounted(() => { void refresh() })
 .add-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 16px; }
 .add-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .add-form input { padding: 4px 8px; border-radius: 6px; border: 1px solid #d0d7de; min-width: 160px; }
+/* 行内编辑输入与添加表单同视觉语言；url 列编辑态保持只读文本（灰化以示不可改） */
+.tbl input { padding: 2px 8px; border-radius: 6px; border: 1px solid #d0d7de; width: 140px; }
+.url-cell { color: #656d76; }
 </style>
