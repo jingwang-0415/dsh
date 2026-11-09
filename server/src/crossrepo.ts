@@ -30,10 +30,17 @@ export function parseShow(raw: string): CommitInfo[] {
   })
 }
 
+// 大仓化：单次 argv 的 sha 数上限，规避 ARG_MAX/argv+env 上限（macOS ~256KB / Linux ~2MB）
+const SHOW_BATCH = 200
+
 export async function showCommits(mirrorDir: string, shas: string[]): Promise<CommitInfo[]> {
   if (shas.length === 0) return []
-  const { stdout } = await runGit(mirrorDir, ['show', '-s', '--format=%H%x1f%an%x1f%ct%x1f%s', ...shas])
-  return parseShow(stdout)
+  const out: CommitInfo[] = []
+  for (let i = 0; i < shas.length; i += SHOW_BATCH) {
+    const { stdout } = await runGit(mirrorDir, ['show', '-s', '--format=%H%x1f%an%x1f%ct%x1f%s', ...shas.slice(i, i + SHOW_BATCH)])
+    out.push(...parseShow(stdout))
+  }
+  return out
 }
 
 export async function crossCompare(

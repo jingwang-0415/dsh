@@ -2,8 +2,10 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
-import { describe, expect, it } from 'vitest'
-import { createOriginRepo } from './fixture.js'
+import { afterEach, describe, expect, it } from 'vitest'
+import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
+
+afterEach(cleanupTracked)
 import { buildApp } from '../src/app.js'
 import type { AppHandle } from '../src/app.js'
 
@@ -20,7 +22,7 @@ describe('优雅退出（存在 SSE 连接）', () => {
         repos: [{ id: 'shutdown', url: origin.dir, defaultBranch: 'master', branchExclude: [], pollIntervalSeconds: 30 }],
         server: { host: '127.0.0.1', port: 0 }
       },
-      dataDir: mkdtempSync(join(tmpdir(), 'gsm-shutdown-'))
+      dataDir: trackTmp(mkdtempSync(join(tmpdir(), 'gsm-shutdown-')))
     })
     await handle.app.listen({ port: 0, host: '127.0.0.1' })
     const addr = handle.app.server.address() as { port: number } | null

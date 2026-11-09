@@ -65,9 +65,10 @@ export interface CrossCompareDto {
   stats: { aTotal: number; bTotal: number; matched: number; onlyA: number; onlyB: number }
 }
 
-// repo 可选作用域：缺省取服务端第一仓（与 server 端 resolveRepo 语义一致）
+// repo 可选作用域：缺省取服务端第一仓（与 server 端 resolveRepo 语义一致）；
+// path 已带查询串时用 & 续接（compare 先例），否则用 ? 起头
 const withRepo = (path: string, repo?: string): string =>
-  repo ? `${path}?repo=${encodeURIComponent(repo)}` : path
+  repo ? `${path}${path.includes('?') ? '&' : '?'}repo=${encodeURIComponent(repo)}` : path
 
 export const api = {
   status: (repo?: string): Promise<StatusDto> => getJson(withRepo('/api/status', repo)),
@@ -78,10 +79,10 @@ export const api = {
     if (repo) u.set('repo', repo)
     return getJson(`/api/commits?${u.toString()}`)
   },
-  commitInclusion: (sha: string): Promise<{ commit: CommitRow; results: InclusionRow[] }> =>
-    getJson(`/api/commits/${sha}/inclusion`),
-  compare: (base: string, target: string): Promise<CompareDto> =>
-    getJson(`/api/compare?base=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}`),
+  commitInclusion: (sha: string, repo?: string): Promise<{ commit: CommitRow; results: InclusionRow[] }> =>
+    getJson(withRepo(`/api/commits/${sha}/inclusion`, repo)),
+  compare: (base: string, target: string, repo?: string): Promise<CompareDto> =>
+    getJson(withRepo(`/api/compare?base=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}`, repo)),
   crossBranches: (repoA: string, repoB: string): Promise<CrossBranchesDto> =>
     getJson(`/api/crossrepo/branches?repoA=${encodeURIComponent(repoA)}&repoB=${encodeURIComponent(repoB)}`),
   crossCompare: (p: { repoA: string; repoB: string; branchA: string; branchB: string; include?: string[]; exclude?: string[] }): Promise<CrossCompareDto> => {
@@ -118,7 +119,11 @@ export function formatFuture(ts: number, now = Date.now()): string {
 // v1.1-T1 起 SSE 载荷带 repoId（多仓）：commits.new 增字段，branches.updated/status.changed 增包
 export interface CommitsNewEvent { repoId: string; branch: string; count: number; subjects: string[] }
 export interface BranchesUpdatedEvent { repoId: string }
-export type StatusChangedEvent = StatusDto & { repoId: string }
+// status.changed 载荷 = server SchedulerStatus（server/src/scheduler.ts）+ repoId（app.ts publish 时并入），
+// 与 REST /api/status 的 StatusDto 相比无 mirrorDir/lastFetch——调度器推送不含镜像路径/最近 fetch 详情
+export type StatusChangedEvent = Pick<
+  StatusDto, 'state' | 'lastRunAt' | 'nextRunAt' | 'consecutiveFailures' | 'lastError' | 'lastNewCommits'
+> & { repoId: string }
 
 export interface EventHandlers {
   onCommitsNew?: (data: CommitsNewEvent) => void

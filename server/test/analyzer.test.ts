@@ -2,8 +2,10 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
-import { createOriginRepo } from './fixture.js'
+import { afterEach, describe, expect, it } from 'vitest'
+import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
+
+afterEach(cleanupTracked)
 import { ensureMirror } from '../src/mirror.js'
 import { aheadBehind, compareBranches, inclusionForCommit } from '../src/analyzer.js'
 import { GitCommandError } from '../src/gitRunner.js'
@@ -29,7 +31,7 @@ describe('inclusionForCommit', () => {
     origin.git(['commit', '--amend', '--no-edit', '--date=2005-04-07T22:13:13 +0000'])
     origin.git(['checkout', 'master'])
 
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     await ensureMirror(origin.dir, mirrorDir)
 
     const branches = [
@@ -48,7 +50,7 @@ describe('inclusionForCommit', () => {
 
   it('未知 sha 抛 GitCommandError', async () => {
     const origin = createOriginRepo()
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     await ensureMirror(origin.dir, mirrorDir)
     const err = await inclusionForCommit(mirrorDir, 'f'.repeat(40), [{ name: 'master', status: 'active' }])
       .catch((e: unknown) => e)
@@ -65,7 +67,7 @@ describe('aheadBehind / compareBranches', () => {
     origin.git(['checkout', 'master'])
     origin.commitFile('m1.txt', '1')
 
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     await ensureMirror(origin.dir, mirrorDir)
     expect(await aheadBehind(mirrorDir, 'dev', 'master')).toEqual({ ahead: 2, behind: 1 })
 

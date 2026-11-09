@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
-import { createOriginRepo } from './fixture.js'
+import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
 import { buildApp } from '../src/app.js'
 import type { AppHandle } from '../src/app.js'
 import type { AppConfig } from '../src/config.js'
@@ -24,12 +24,12 @@ describe('API 集成（真实 git fixture）', () => {
         repos: [{ id: 'demo', url: origin.dir, defaultBranch: 'master', branchExclude: [], pollIntervalSeconds: 30 }],
         server: { host: '127.0.0.1', port: 43900 }
       },
-      dataDir: mkdtempSync(join(tmpdir(), 'gsm-data-'))
+      dataDir: trackTmp(mkdtempSync(join(tmpdir(), 'gsm-data-')))
     })
     await handle.schedulers[0].runOnce()   // 首轮回填
   })
 
-  afterAll(async () => { await handle.close() })
+  afterAll(async () => { await handle.close(); cleanupTracked() })   // 目录在 beforeAll 建、文件级共享：关停后统一清理
 
   it('GET /api/status 暴露调度状态与镜像路径', async () => {
     const res = await handle.app.inject({ method: 'GET', url: '/api/status' })
@@ -96,7 +96,7 @@ describe('API 集成（真实 git fixture）', () => {
   })
 
   it('buildApp 幂等登记 repos：同 id 改 URL 走 upsert 且 created_at 保留', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'gsm-upsert-'))
+    const dataDir = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-upsert-')))
     const mkHandle = (url: string): Promise<AppHandle> => buildApp({
       configOverride: {
         repos: [{ id: 'upsert-demo', url, defaultBranch: 'master', branchExclude: [], pollIntervalSeconds: 30 }],
@@ -213,11 +213,11 @@ describe('跨仓对比 API（真实 git fixture，两仓独立历史）', () => 
       ],
       server: { host: '127.0.0.1', port: 43900 }
     }
-    handle = await buildApp({ configOverride: cfg, dataDir: mkdtempSync(join(tmpdir(), 'gsm-cr-data-')) })
+    handle = await buildApp({ configOverride: cfg, dataDir: trackTmp(mkdtempSync(join(tmpdir(), 'gsm-cr-data-'))) })
     for (const s of handle.schedulers) await s.runOnce()   // 首轮回填两仓
   })
 
-  afterAll(async () => { await handle.close() })
+  afterAll(async () => { await handle.close(); cleanupTracked() })   // 目录在 beforeAll 建、文件级共享：关停后统一清理
 
   it('crossrepo/branches 同名配对与未配对', async () => {
     o1.git(['checkout', '-b', 'dev'])           // r1 多一个 dev

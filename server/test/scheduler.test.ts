@@ -2,8 +2,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { describe, expect, it, vi } from 'vitest'
-import { createOriginRepo } from './fixture.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
+
+afterEach(cleanupTracked)
 import { openDb } from '../src/db.js'
 import { Scheduler, nextBackoffMs } from '../src/scheduler.js'
 import type { CommitInfo } from '../src/parse.js'
@@ -25,7 +27,7 @@ function makeScheduler(db: Database.Database, repoUrl: string, mirrorDir: string
   return { s, onCommitsNew, onBranchesUpdated, onStatus }
 }
 function setupDb(): Database.Database {
-  const db = openDb(join(mkdtempSync(join(tmpdir(), 'gsm-db-')), 'monitor.db'))
+  const db = openDb(join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-db-'))), 'monitor.db'))
   db.prepare(`INSERT INTO repos (id, url, created_at) VALUES ('r', 'x', 1)`).run()
   return db
 }
@@ -49,7 +51,7 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
     origin.commitFile('r.txt', '1')
     origin.git(['checkout', 'master'])
     const db = setupDb()
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     const { s, onCommitsNew } = makeScheduler(db, origin.dir, mirrorDir)
     const r = await s.runOnce()
     expect('newCommits' in r && r.newCommits).toBe(2)
@@ -61,7 +63,7 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
   it('新提交触发增量与 onCommitsNew', async () => {
     const origin = createOriginRepo()
     const db = setupDb()
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     const { s, onCommitsNew } = makeScheduler(db, origin.dir, mirrorDir)
     await s.runOnce()
 
@@ -77,7 +79,7 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
   it('远端不可达进入退避并记录 fetch_events=failed', async () => {
     const origin = createOriginRepo()
     const db = setupDb()
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     const { s } = makeScheduler(db, origin.dir, mirrorDir)
     await s.runOnce()
 
@@ -95,7 +97,7 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
   it('镜像损坏后自愈：重克隆并按 spec §11 全量回填（幂等无重复）', async () => {
     const origin = createOriginRepo()
     const db = setupDb()
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     const { s } = makeScheduler(db, origin.dir, mirrorDir)
     await s.runOnce()
     const baseBranches = countRows(db, 'branches')
@@ -116,7 +118,7 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
   it('损坏窗口期间上游新增分支：重克隆后回填补齐（spec §11）', async () => {
     const origin = createOriginRepo()
     const db = setupDb()
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     const { s } = makeScheduler(db, origin.dir, mirrorDir)
     await s.runOnce()
     expect(countRows(db, 'branches')).toBe(1)
@@ -145,7 +147,7 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
   it('运行中重入直接跳过', async () => {
     const origin = createOriginRepo()
     const db = setupDb()
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     const { s } = makeScheduler(db, origin.dir, mirrorDir)
     // @ts-expect-error 直接操纵私有标志模拟运行中
     s.running = true
@@ -159,7 +161,7 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
   it('stop 后 loop 早退：不产生 fetch_events 也不触发 onStatus', async () => {
     const origin = createOriginRepo()
     const db = setupDb()
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     const { s, onStatus } = makeScheduler(db, origin.dir, mirrorDir)
     s.stop()
     await (s as any).loop()
@@ -173,7 +175,7 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
   it('loop 内 onStatus 抛错不 reject 且 timer 已排程', async () => {
     const origin = createOriginRepo()
     const db = setupDb()
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     const onStatus = vi.fn(() => { throw new Error('socket destroyed') })
     const s = new Scheduler({
       db,
@@ -192,7 +194,7 @@ describe('Scheduler.runOnce（真实 git fixture）', () => {
   it('onStatus 抛错不 reject 且不卡死互斥', async () => {
     const origin = createOriginRepo()
     const db = setupDb()
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     const onCommitsNew = vi.fn()
     const onBranchesUpdated = vi.fn()
     const onStatus = vi.fn(() => { throw new Error('socket destroyed') })

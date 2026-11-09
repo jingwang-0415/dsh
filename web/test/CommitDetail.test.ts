@@ -15,8 +15,9 @@ const payload = {
   ]
 }
 
-async function mountView() {
-  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => payload })))
+async function mountView(query = '') {
+  const fetchMock = vi.fn(async (_url: string) => ({ ok: true, json: async () => payload }))
+  vi.stubGlobal('fetch', fetchMock)
   Object.defineProperty(navigator, 'clipboard', {
     value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true
   })
@@ -24,18 +25,18 @@ async function mountView() {
     history: createMemoryHistory(),
     routes: [{ path: '/commit/:sha', component: CommitDetail }]
   })
-  await router.push(`/commit/${sha}`)
+  await router.push(`/commit/${sha}${query}`)
   await router.isReady()
   const wrapper = mount(CommitDetail, { global: { plugins: [router] } })
   await flushPromises()
-  return wrapper
+  return { wrapper, fetchMock }
 }
 
 describe('CommitDetail 视图', () => {
   beforeEach(() => { vi.unstubAllGlobals() })
 
   it('未包含红色置顶，已包含其后，删除分支灰显', async () => {
-    const wrapper = await mountView()
+    const { wrapper } = await mountView()
     const html = wrapper.html()
     const missIdx = html.indexOf('release/1.0')
     const okIdx = html.indexOf('release/2.0')
@@ -51,10 +52,18 @@ describe('CommitDetail 视图', () => {
   })
 
   it('复制按钮写入 cherry-pick 命令', async () => {
-    const wrapper = await mountView()
+    const { wrapper } = await mountView()
     const btn = wrapper.findAll('button').find(b => b.text().includes('git cherry-pick'))!
     await btn.trigger('click')
     await flushPromises()
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(`git cherry-pick ${sha}`)
+  })
+
+  it('repo query 透传 inclusion 请求，缺省不拼 repo 参数', async () => {
+    const { fetchMock } = await mountView('?repo=r2')
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('repo=r2')
+
+    const { fetchMock: bareMock } = await mountView()
+    expect(String(bareMock.mock.calls[0]?.[0])).not.toContain('repo=')
   })
 })

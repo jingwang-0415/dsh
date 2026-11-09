@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createSseHub } from '../src/sse.js'
 import type { FastifyReply } from 'fastify'
 
@@ -8,6 +8,7 @@ function fakeReply(): { reply: FastifyReply; writes: string[] } {
   const res = new EventEmitter() as EventEmitter & { writeHead: unknown; write: unknown }
   ;(res as Record<string, unknown>).writeHead = () => {}
   ;(res as Record<string, unknown>).write = (s: string) => { writes.push(s) }
+  ;(res as Record<string, unknown>).destroy = () => {}   // closeAll 路径需要；特例用例自行覆写
   const reply = { hijack: () => {}, raw: res } as unknown as FastifyReply
   return { reply, writes }
 }
@@ -75,5 +76,43 @@ describe('SseHub', () => {
     hub.closeAll()
     expect(destroyed).toHaveLength(2)
     expect(hub.clientCount()).toBe(0)
+  })
+
+  it('惰性心跳：有客户端时每 25s 广播 :ping，closeAll 后停止写入', () => {
+    vi.useFakeTimers()
+    try {
+      const hub = createSseHub()
+      const a = fakeReply()
+      const b = fakeReply()
+      hub.add(a.reply)
+      hub.add(b.reply)
+      vi.advanceTimersByTime(25_000)
+      expect(a.writes.some(w => w.includes(':ping'))).toBe(true)
+      expect(b.writes.some(w => w.includes(':ping'))).toBe(true)
+      hub.closeAll()
+      const writesBefore = a.writes.length
+      vi.advanceTimersByTime(60_000)
+      expect(a.writes.length).toBe(writesBefore)
+      expect(hub.clientCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('心跳随最后一个客户端断开（close 事件）停止', () => {
+    vi.useFakeTimers()
+    try {
+      const hub = createSseHub()
+      const a = fakeReply()
+      hub.add(a.reply)
+      vi.advanceTimersByTime(25_000)
+      expect(a.writes.some(w => w.includes(':ping'))).toBe(true)
+      ;(a.reply.raw as EventEmitter).emit('close')   // 客户端断开，clients 清空
+      const writesBefore = a.writes.length
+      vi.advanceTimersByTime(60_000)
+      expect(a.writes.length).toBe(writesBefore)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

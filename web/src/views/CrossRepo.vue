@@ -66,7 +66,10 @@ function syncQuery(): void {
   void router.replace({
     path: '/crossrepo',
     query: {
-      repoA: repoA.value, repoB: repoB.value, branchA: branchA.value, branchB: branchB.value,
+      repoA: repoA.value, repoB: repoB.value,
+      // 分支为空时整个键不落 URL：避免切仓瞬间的 branchA=&branchB= 空参形态（URL 即状态，缺省 = 待派生）
+      ...(branchA.value ? { branchA: branchA.value } : {}),
+      ...(branchB.value ? { branchB: branchB.value } : {}),
       ...(includeGlob.value ? { include: includeGlob.value } : {}),
       ...(excludeGlob.value ? { exclude: excludeGlob.value } : {})
     }
@@ -76,8 +79,8 @@ function syncQuery(): void {
 async function onRepoChange(): Promise<void> {
   branchA.value = ''
   branchB.value = ''
+  await loadBranches()   // 先派生新默认分支（paired[0]），再回写 URL，避免把空分支写进 query
   syncQuery()
-  await loadBranches()
   await load()
 }
 
@@ -138,7 +141,7 @@ onMounted(async () => {
           <h3>{{ result.branchPair.repoA }} 独有（{{ result.onlyInA.length }}）</h3>
           <ul class="rows">
             <li v-for="c in result.onlyInA" :key="c.sha" class="row">
-              <code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}
+              <RouterLink :to="`/commit/${c.sha}${repoA ? `?repo=${repoA}` : ''}`"><code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}</RouterLink>
               <span class="muted"> {{ c.authorName }} · {{ formatRelative(c.committedAt) }}</span>
             </li>
             <li v-if="result.onlyInA.length === 0" class="muted">（无）</li>
@@ -148,7 +151,7 @@ onMounted(async () => {
           <h3>{{ result.branchPair.repoB }} 独有（{{ result.onlyInB.length }}）</h3>
           <ul class="rows">
             <li v-for="c in result.onlyInB" :key="c.sha" class="row">
-              <code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}
+              <RouterLink :to="`/commit/${c.sha}${repoB ? `?repo=${repoB}` : ''}`"><code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}</RouterLink>
               <span class="muted"> {{ c.authorName }} · {{ formatRelative(c.committedAt) }}</span>
             </li>
             <li v-if="result.onlyInB.length === 0" class="muted">（无）</li>

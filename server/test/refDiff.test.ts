@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest'
-import { createOriginRepo } from './fixture.js'
+import { afterEach, describe, expect, it } from 'vitest'
+import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
+
+afterEach(cleanupTracked)
 import { ensureMirror } from '../src/mirror.js'
 import { diffRefs } from '../src/refDiff.js'
 import { mkdtempSync } from 'node:fs'
@@ -31,7 +33,7 @@ describe('classifyChange（真实 git）', () => {
     const origin = createOriginRepo()
     const oldSha = origin.commitFile('a.txt', '1')
     const newSha = origin.commitFile('b.txt', '2')
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     await ensureMirror(origin.dir, mirrorDir)
     const c = await classifyChange(mirrorDir, { type: 'updated', branch: 'master', oldSha, newSha })
     expect(c).toEqual({ type: 'fast-forward', branch: 'master', oldSha, newSha })
@@ -40,7 +42,7 @@ describe('classifyChange（真实 git）', () => {
   it('历史重写判为 force-push', async () => {
     const origin = createOriginRepo()
     const oldSha = origin.commitFile('a.txt', '1')
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     await ensureMirror(origin.dir, mirrorDir)
     // 固定 author 日期：同秒内 amend 且无变更会产生完全相同的提交对象（SHA 不变），导致历史重写未发生
     origin.git(['commit', '--amend', '--no-edit', '--allow-empty', '--date=2005-04-07T22:13:13 +0000'])  // 镜像克隆后重写历史

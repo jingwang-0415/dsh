@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { connectEvents, formatFuture, formatRelative } from '../src/api.js'
+import { api, connectEvents, formatFuture, formatRelative, type CommitsNewEvent, type StatusChangedEvent } from '../src/api.js'
 
 describe('formatRelative', () => {
   const now = 1_700_000_000_000
@@ -19,6 +19,36 @@ describe('formatFuture', () => {
     expect(formatFuture(now + 3 * 3600_000, now)).toBe('3 小时后')
     expect(formatFuture(now + 2 * 86_400_000, now)).toBe('稍后')
     expect(formatFuture(now - 10_000, now)).toBe('刚刚')
+  })
+})
+
+// repo 作用域契约（与 server resolveRepo 语义一致）：显式 repo 拼进查询串，缺省不出现 repo 参数
+describe('repo 作用域请求', () => {
+  function stubFetch(): ReturnType<typeof vi.fn<(_url: string) => Promise<{ ok: boolean; json: () => Promise<unknown> }>>> {
+    return vi.fn(async (_url: string) => ({ ok: true, json: async () => ({}) }))
+  }
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('commitInclusion/compare/branchCommits 显式 repo 拼入查询串', async () => {
+    const fetchMock = stubFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    await api.commitInclusion('abc', 'r2')
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/commits/abc/inclusion?repo=r2')
+    await api.compare('main', 'dev', 'r1')
+    expect(fetchMock.mock.calls[1]?.[0]).toContain('base=main')
+    expect(fetchMock.mock.calls[1]?.[0]).toContain('target=dev')
+    expect(fetchMock.mock.calls[1]?.[0]).toContain('repo=r1')
+    await api.branchCommits('master', 100, 'r3')
+    expect(fetchMock.mock.calls[2]?.[0]).toContain('repo=r3')
+  })
+
+  it('缺省 repo 不拼 repo 参数（缺省第一仓由服务端决定）', async () => {
+    const fetchMock = stubFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    await api.commitInclusion('abc')
+    await api.compare('main', 'dev')
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/commits/abc/inclusion')
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/compare?base=main&target=dev')
   })
 })
 
@@ -43,9 +73,15 @@ describe('connectEvents', () => {
     connectEvents({ onCommitsNew, onStatus })
     const es = FakeEventSource.last!
     expect(es.url).toBe('/api/events')
-    es.emit('commits.new', { branch: 'master', count: 1 })
-    es.emit('status.changed', { state: 'idle' })
-    expect(onCommitsNew).toHaveBeenCalledWith({ branch: 'master', count: 1 })
-    expect(onStatus).toHaveBeenCalledWith({ state: 'idle' })
+    // fixture 以导出事件类型标注（真实载荷形状，含 repoId）：形状漂移时 typecheck 门直接报错
+    const commitsNew: CommitsNewEvent = { repoId: 'r1', branch: 'master', count: 1, subjects: ['feat: x'] }
+    const statusChanged: StatusChangedEvent = {
+      repoId: 'r1', state: 'idle', lastRunAt: null, nextRunAt: null,
+      consecutiveFailures: 0, lastError: null, lastNewCommits: null
+    }
+    es.emit('commits.new', commitsNew)
+    es.emit('status.changed', statusChanged)
+    expect(onCommitsNew).toHaveBeenCalledWith(commitsNew)
+    expect(onStatus).toHaveBeenCalledWith(statusChanged)
   })
 })

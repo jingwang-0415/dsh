@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api, connectEvents, formatFuture, formatRelative, type BranchRow, type RepoDto, type StatusDto } from '../api'
 
+const route = useRoute()
 const router = useRouter()
 const status = ref<StatusDto | null>(null)
 const defaultBranch = ref('master')
 const branches = ref<BranchRow[]>([])
 const repos = ref<RepoDto[]>([])
-const repoId = ref('')
+// URL 即状态（沿用 CrossRepo 先例）：初始取 ?repo=，切仓后 onRepoChange 回写 query
+const repoId = ref((route.query.repo as string) ?? '')
 const error = ref('')
 let es: EventSource | null = null
 
@@ -41,8 +43,10 @@ onMounted(async () => {
     onBranchesUpdated: () => void refresh(),
     onStatus: s => {
       // 只认当前选中仓的 status 推送：其余仓的调度状态不覆写本页横幅；
-      // 初始 refresh 失败时 status 恒为 null，借 SSE 推送触发一次重新拉取完成自愈
-      if (status.value && s.repoId === repoId.value) { status.value = s } else { void refresh() }
+      // 初始 refresh 失败时 status 恒为 null，借 SSE 推送触发一次重新拉取完成自愈。
+      // SSE 载荷是 SchedulerStatus+repoId（无 mirrorDir/lastFetch），合并而非整体替换：
+      // 直接替换会把 mirrorDir/lastFetch 抹成 undefined，bannerClass 的 lastFetch 判断随之失效
+      if (status.value && s.repoId === repoId.value) { status.value = { ...status.value, ...s } } else { void refresh() }
     }
   })
 })
@@ -65,14 +69,20 @@ function bannerText(): string {
   return `监听正常 · 上次同步 ${s.lastRunAt ? formatRelative(s.lastRunAt) : '从未'}`
 }
 function openCompare(b: BranchRow): void {
-  void router.push({ path: '/compare', query: { base: defaultBranch.value, target: b.name } })
+  void router.push({ path: '/compare', query: { repo: repoId.value, base: defaultBranch.value, target: b.name } })
+}
+
+// 切仓：回写当前 query（URL 即状态），再按新仓刷新
+function onRepoChange(): void {
+  void router.replace({ path: '/', query: repoId.value ? { repo: repoId.value } : {} })
+  void refresh()
 }
 </script>
 
 <template>
   <section class="overview">
     <div class="pick">
-      <label>仓库 <select v-model="repoId" @change="refresh"><option v-for="r in repos" :key="r.id" :value="r.id">{{ r.id }}</option></select></label>
+      <label>仓库 <select v-model="repoId" @change="onRepoChange"><option v-for="r in repos" :key="r.id" :value="r.id">{{ r.id }}</option></select></label>
     </div>
     <div class="banner" :class="bannerClass()">{{ bannerText() }}</div>
     <p v-if="error" class="banner banner-red">加载失败：{{ error }}</p>

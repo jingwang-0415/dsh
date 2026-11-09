@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createOriginRepo } from './fixture.js'
+import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
 import { buildApp } from '../src/app.js'
 import type { AppHandle } from '../src/app.js'
 import type { AppConfig } from '../src/config.js'
@@ -26,11 +26,11 @@ describe('多仓调度与 repo 作用域（真实 git）', () => {
       ],
       server: { host: '127.0.0.1', port: 43900 }
     }
-    handle = await buildApp({ configOverride: cfg, dataDir: mkdtempSync(join(tmpdir(), 'gsm-mr-data-')) })
+    handle = await buildApp({ configOverride: cfg, dataDir: trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mr-data-'))) })
     for (const s of handle.schedulers) await s.runOnce()
   })
 
-  afterAll(async () => { await handle.close() })
+  afterAll(async () => { await handle.close(); cleanupTracked() })   // 目录在 beforeAll 建、文件级共享：关停后统一清理
 
   it('两个 scheduler 各自回填各自的仓', async () => {
     const r1 = await handle.app.inject({ method: 'GET', url: '/api/branches?repo=r1' })
