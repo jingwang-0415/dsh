@@ -1,10 +1,12 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { GitCommandError, pipeRunGit, runGit } from '../src/gitRunner.js'
-import { createOriginRepo } from './fixture.js'
+import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
 import { ensureMirror } from '../src/mirror.js'
+
+afterEach(cleanupTracked)
 
 describe('runGit', () => {
   it('执行 git --version 并返回 stdout', async () => {
@@ -13,7 +15,7 @@ describe('runGit', () => {
   })
 
   it('失败命令抛 GitCommandError 且带 stderr', async () => {
-    const notARepo = mkdtempSync(join(tmpdir(), 'gsm-norepo-'))
+    const notARepo = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-norepo-')))
     const err = await runGit(notARepo, ['status']).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(GitCommandError)
     expect((err as GitCommandError).stderr.length).toBeGreaterThan(0)
@@ -24,7 +26,7 @@ describe('runGit', () => {
   })
 
   it('大体积多字节输出跨 chunk 边界不损坏', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'gsm-bigout-'))
+    const dir = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-bigout-')))
     const lines: string[] = []
     for (let i = 0; i < 20_000; i++) lines.push(`第${i}行：中文提交主题测试，多字节UTF8。`)
     const expected = lines.join('\n') + '\n'
@@ -41,7 +43,7 @@ describe('pipeRunGit 双进程流式', () => {
     origin.git(['checkout', '-b', 'dev'])
     origin.commitFile('x1.txt', '1\n')
     origin.commitFile('x2.txt', '2\n')
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-pipe-m-')), 'm.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-pipe-m-'))), 'm.git')
     await ensureMirror(origin.dir, mirrorDir)
     // 契约修正（探针实证）：plan 原文 rev-list --pretty=format:%H 无 -p → 不产出补丁文本，patch-id 必然空输出；
     // rev-list 不支持 -p（log 专属 diff 选项），故用 log -p（即 branchFingerprints 实际参数形态）
@@ -65,7 +67,7 @@ describe('pipeRunGit 双进程流式', () => {
 
   it('A 非 0 → GitCommandError(argsA) 且带 stderr', async () => {
     const origin = createOriginRepo('gsm-pipea-')
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-pipea-m-')), 'm.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-pipea-m-'))), 'm.git')
     await ensureMirror(origin.dir, mirrorDir)
     const err = await pipeRunGit(mirrorDir, ['log', 'refs/heads/nope'], mirrorDir, ['patch-id', '--stable'])
       .catch((e: unknown) => e)
@@ -76,7 +78,7 @@ describe('pipeRunGit 双进程流式', () => {
 
   it('B 非 0 → GitCommandError(argsB)', async () => {
     const origin = createOriginRepo('gsm-pipeb-')
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-pipeb-m-')), 'm.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-pipeb-m-'))), 'm.git')
     await ensureMirror(origin.dir, mirrorDir)
     const err = await pipeRunGit(mirrorDir, ['log', '-p', '--pretty=format:%H', 'HEAD'], mirrorDir, ['patch-id', '--bogus'])
       .catch((e: unknown) => e)

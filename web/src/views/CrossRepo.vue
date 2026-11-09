@@ -66,7 +66,10 @@ function syncQuery(): void {
   void router.replace({
     path: '/crossrepo',
     query: {
-      repoA: repoA.value, repoB: repoB.value, branchA: branchA.value, branchB: branchB.value,
+      repoA: repoA.value, repoB: repoB.value,
+      // 分支为空时整个键不落 URL：避免切仓瞬间的 branchA=&branchB= 空参形态（URL 即状态，缺省 = 待派生）
+      ...(branchA.value ? { branchA: branchA.value } : {}),
+      ...(branchB.value ? { branchB: branchB.value } : {}),
       ...(includeGlob.value ? { include: includeGlob.value } : {}),
       ...(excludeGlob.value ? { exclude: excludeGlob.value } : {})
     }
@@ -76,8 +79,8 @@ function syncQuery(): void {
 async function onRepoChange(): Promise<void> {
   branchA.value = ''
   branchB.value = ''
+  await loadBranches()   // 先派生新默认分支（paired[0]），再回写 URL，避免把空分支写进 query
   syncQuery()
-  await loadBranches()
   await load()
 }
 

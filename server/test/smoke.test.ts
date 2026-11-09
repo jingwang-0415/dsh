@@ -1,8 +1,11 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { cleanupTracked, trackTmp } from './fixture.js'
 import { buildApp } from '../src/app.js'
+
+afterEach(cleanupTracked)
 import type { AppConfig } from '../src/config.js'
 
 const testConfig: AppConfig = {
@@ -12,7 +15,7 @@ const testConfig: AppConfig = {
 
 describe('app 冒烟', () => {
   it('GET /api/ping 返回 pong', async () => {
-    const { app, close } = await buildApp({ configOverride: testConfig, dataDir: mkdtempSync(join(tmpdir(), 'gsm-smoke-')) })
+    const { app, close } = await buildApp({ configOverride: testConfig, dataDir: trackTmp(mkdtempSync(join(tmpdir(), 'gsm-smoke-'))) })
     const res = await app.inject({ method: 'GET', url: '/api/ping' })
     expect(res.statusCode).toBe(200)
     expect(res.json()).toEqual({ pong: true })

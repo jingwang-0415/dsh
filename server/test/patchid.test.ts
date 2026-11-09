@@ -2,8 +2,10 @@ import { mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
-import { createOriginRepo } from './fixture.js'
+import { afterEach, describe, expect, it } from 'vitest'
+import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
+
+afterEach(cleanupTracked)
 import { ensureMirror, fetchMirror } from '../src/mirror.js'
 import { buildPathspecs, branchFingerprints, parsePatchIds } from '../src/patchid.js'
 import { runGit } from '../src/gitRunner.js'
@@ -41,8 +43,8 @@ describe('branchFingerprints（真实 git，独立双仓）', () => {
     const shaB = b.commitFile('fix.txt', 'same content\n')
     expect(shaA).not.toBe(shaB) // 独立历史
 
-    const ma = join(mkdtempSync(join(tmpdir(), 'gsm-pa-m-')), 'm.git')
-    const mb = join(mkdtempSync(join(tmpdir(), 'gsm-pb-m-')), 'm.git')
+    const ma = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-pa-m-'))), 'm.git')
+    const mb = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-pb-m-'))), 'm.git')
     await ensureMirror(a.dir, ma)
     await ensureMirror(b.dir, mb)
 
@@ -67,7 +69,7 @@ describe('branchFingerprints（真实 git，独立双仓）', () => {
     // fixture commitFile 为裸 writeFileSync，子目录需先创建（探针实证：ENOENT）
     mkdirSync(join(origin.dir, 'vendor'), { recursive: true })
     origin.commitFile('vendor/lib.js', 'x')
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-pc-m-')), 'm.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-pc-m-'))), 'm.git')
     await ensureMirror(origin.dir, mirrorDir)
     const withVendor = await branchFingerprints(mirrorDir, 'master', [])
     const withoutVendor = await branchFingerprints(mirrorDir, 'master', buildPathspecs([], ['vendor/**']))
@@ -81,7 +83,7 @@ describe('branchFingerprints（真实 git，独立双仓）', () => {
     const shaVendor = origin.commitFile('vendor/x.js', 'vendor-x')
     mkdirSync(join(origin.dir, 'src'), { recursive: true })
     const shaSrc = origin.commitFile('src/y.js', 'src-y')
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-pe-m-')), 'm.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-pe-m-'))), 'm.git')
     await ensureMirror(origin.dir, mirrorDir)
     const fps = await branchFingerprints(mirrorDir, 'master', buildPathspecs(['src/**'], []))
     expect(fps.some(f => f.sha === shaSrc)).toBe(true)
@@ -90,7 +92,7 @@ describe('branchFingerprints（真实 git，独立双仓）', () => {
 
   it('runGit input 参数喂 stdin（真实 patch-id 管道）', async () => {
     const origin = createOriginRepo('gsm-pd-')
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-pd-m-')), 'm.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-pd-m-'))), 'm.git')
     await ensureMirror(origin.dir, mirrorDir)
     const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: mirrorDir, encoding: 'utf8' }).stdout.trim()
     // 简报实证修正：diff-tree 对根提交默认不产出补丁，需 --root 才能喂出真实补丁（探针验证）
@@ -103,7 +105,7 @@ describe('branchFingerprints（真实 git，独立双仓）', () => {
     const origin = createOriginRepo('gsm-pf-')
     origin.git(['checkout', '-b', 'multi'])
     for (let i = 1; i <= 5; i++) origin.commitFile(`m${i}.txt`, `content ${i}\n`)
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-pf-m-')), 'm.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-pf-m-'))), 'm.git')
     await ensureMirror(origin.dir, mirrorDir)
     const fps = await branchFingerprints(mirrorDir, 'multi', [])
     // 期望值按 v1.1 实现独立复算：整段 log -p 文本（spawnSync input）喂 patch-id --stable

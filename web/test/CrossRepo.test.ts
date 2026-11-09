@@ -43,7 +43,7 @@ async function mountView(query: string) {
   await router.isReady()
   const wrapper = mount(CrossRepo, { global: { plugins: [router] } })
   await flushPromises()
-  return { wrapper, fetchMock }
+  return { wrapper, fetchMock, router }
 }
 
 describe('CrossRepo 视图', () => {
@@ -69,5 +69,38 @@ describe('CrossRepo 视图', () => {
     expect(url).toContain('branchA=main')
     expect(url).toContain('branchB=main')
     expect(url).toContain('exclude=vendor%2F**')
+  })
+
+  it('切仓后 URL 回写新默认分支（paired[0]），消除 branchA=&branchB= 空参形态', async () => {
+    const { wrapper, router } = await mountView('?repoA=gh&repoB=gte&branchA=feat&branchB=main')
+    const selects = wrapper.findAll('select')
+    expect(selects[0].element.value).toBe('gh')
+    await selects[0].setValue('gte')   // 切仓 A → onRepoChange
+    await flushPromises()
+    expect(router.currentRoute.value.query.branchA).toBe('main')
+    expect(router.currentRoute.value.query.branchB).toBe('main')
+    expect(router.currentRoute.value.fullPath).not.toContain('branchA=&branchB=')
+  })
+
+  it('切仓且 branches 请求失败时 URL 不落空分支键（无 branchA=/branchB= 键）', async () => {
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: !url.startsWith('/api/crossrepo/branches'),   // branches 端点恒失败
+      json: async () => {
+        if (url.startsWith('/api/crossrepo/compare')) return comparePayload
+        if (url === '/api/repos') return reposPayload
+        return []
+      }
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/crossrepo', component: CrossRepo }] })
+    await router.push('/crossrepo?repoA=gh&repoB=gte&branchA=feat&branchB=main')
+    await router.isReady()
+    const wrapper = mount(CrossRepo, { global: { plugins: [router] } })
+    await flushPromises()
+    await wrapper.findAll('select')[0].setValue('gte')   // 切仓 A，branches 派生失败
+    await flushPromises()
+    expect(wrapper.find('.banner-red').exists()).toBe(true)   // 失败路径真实发生
+    expect(router.currentRoute.value.fullPath).not.toContain('branchA=')
+    expect(router.currentRoute.value.fullPath).not.toContain('branchB=')
   })
 })

@@ -2,8 +2,10 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
-import { createOriginRepo } from './fixture.js'
+import { afterEach, describe, expect, it } from 'vitest'
+import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
+
+afterEach(cleanupTracked)
 import { ensureMirror, fetchMirror } from '../src/mirror.js'
 import { openDb } from '../src/db.js'
 import { applyChanges, backfillRepo, finishFetchEvent, insertCommits, startFetchEvent } from '../src/sync.js'
@@ -25,9 +27,9 @@ describe('sync（真实 git fixture）', () => {
     origin.git(['checkout', '-b', 'release/1.0'])
     origin.commitFile('r.txt', 'r1')
     origin.git(['checkout', 'master'])
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     await ensureMirror(origin.dir, mirrorDir)
-    const db = openDb(join(mkdtempSync(join(tmpdir(), 'gsm-db-')), 'monitor.db'))
+    const db = openDb(join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-db-'))), 'monitor.db'))
     db.prepare(`INSERT INTO repos (id, url, created_at) VALUES ('r', 'x', 1)`).run()
 
     const snap = await snapshotRefs(mirrorDir)
@@ -40,9 +42,9 @@ describe('sync（真实 git fixture）', () => {
 
   it('fast-forward 增量只插入新提交', async () => {
     const origin = createOriginRepo()
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     await ensureMirror(origin.dir, mirrorDir)
-    const db = openDb(join(mkdtempSync(join(tmpdir(), 'gsm-db-')), 'monitor.db'))
+    const db = openDb(join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-db-'))), 'monitor.db'))
     db.prepare(`INSERT INTO repos (id, url, created_at) VALUES ('r', 'x', 1)`).run()
     await backfillRepo(db, 'r', mirrorDir, [{ branch: 'master', sha: headSha(origin.dir) }])
 
@@ -60,9 +62,9 @@ describe('sync（真实 git fixture）', () => {
 
   it('force-push 更新 head 并标记 rewritten；deleted 标记状态', async () => {
     const origin = createOriginRepo()
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     await ensureMirror(origin.dir, mirrorDir)
-    const db = openDb(join(mkdtempSync(join(tmpdir(), 'gsm-db-')), 'monitor.db'))
+    const db = openDb(join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-db-'))), 'monitor.db'))
     db.prepare(`INSERT INTO repos (id, url, created_at) VALUES ('r', 'x', 1)`).run()
     await backfillRepo(db, 'r', mirrorDir, [{ branch: 'master', sha: headSha(origin.dir) }])
 
@@ -91,9 +93,9 @@ describe('sync（真实 git fixture）', () => {
     origin.commitFile('a.txt', '1')
     origin.commitFile('b.txt', '2')
     origin.commitFile('c.txt', '3')
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     await ensureMirror(origin.dir, mirrorDir)
-    const db = openDb(join(mkdtempSync(join(tmpdir(), 'gsm-db-')), 'monitor.db'))
+    const db = openDb(join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-db-'))), 'monitor.db'))
     db.prepare(`INSERT INTO repos (id, url, created_at) VALUES ('r', 'x', 1)`).run()
 
     const page = await listCommits(mirrorDir, 'refs/heads/master', { maxCount: 2 })
@@ -110,7 +112,7 @@ describe('sync（真实 git fixture）', () => {
     const origin = createOriginRepo()
     origin.commitFile('docs.txt', 'docs')
     origin.commitFile('说明.txt', '中文内容')
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-mirror-')), 'mirror.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-'))), 'mirror.git')
     await ensureMirror(origin.dir, mirrorDir)
     const commits = await listCommits(mirrorDir, 'refs/heads/master')
 

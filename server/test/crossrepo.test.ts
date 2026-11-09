@@ -2,8 +2,10 @@ import { mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
-import { createOriginRepo } from './fixture.js'
+import { afterEach, describe, expect, it } from 'vitest'
+import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
+
+afterEach(cleanupTracked)
 import { ensureMirror } from '../src/mirror.js'
 import { crossCompare, mergePatchMaps, showCommits } from '../src/crossrepo.js'
 import type { Fingerprint } from '../src/patchid.js'
@@ -33,8 +35,8 @@ describe('crossCompare（真实 git 独立双仓）', () => {
     b.git(['checkout', '-b', 'dev'])
     const shaSameB = b.commitFile('same.txt', 'identical patch\n')
 
-    const ma = join(mkdtempSync(join(tmpdir(), 'gsm-ca-m-')), 'm.git')
-    const mb = join(mkdtempSync(join(tmpdir(), 'gsm-cb-m-')), 'm.git')
+    const ma = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-ca-m-'))), 'm.git')
+    const mb = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-cb-m-'))), 'm.git')
     await ensureMirror(a.dir, ma)
     await ensureMirror(b.dir, mb)
 
@@ -55,8 +57,8 @@ describe('crossCompare（真实 git 独立双仓）', () => {
     // fixture commitFile 为裸 writeFileSync，子目录需先创建（探针实证：ENOENT）
     mkdirSync(join(a.dir, 'vendor'), { recursive: true })
     a.commitFile('vendor/lib.js', 'x')
-    const ma = join(mkdtempSync(join(tmpdir(), 'gsm-cc-m-')), 'm.git')
-    const mb = join(mkdtempSync(join(tmpdir(), 'gsm-cc2-m-')), 'm.git')
+    const ma = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-cc-m-'))), 'm.git')
+    const mb = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-cc2-m-'))), 'm.git')
     await ensureMirror(a.dir, ma)
     await ensureMirror(b.dir, mb)
     const r = await crossCompare(ma, 'dev', mb, 'master', [], ['vendor/**'])
@@ -76,7 +78,7 @@ describe('showCommits 分批（真实 git）', () => {
     expect(fi.status).toBe(0)
     const revList = spawnSync('git', ['rev-list', 'refs/heads/batch'], { cwd: origin.dir, encoding: 'utf8' })
     const all = revList.stdout.trim().split('\n')
-    const mirrorDir = join(mkdtempSync(join(tmpdir(), 'gsm-cb-m-')), 'm.git')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-cb-m-'))), 'm.git')
     await ensureMirror(origin.dir, mirrorDir)
     // 乱序输入（非提交序）→ 断言结果与输入数组完全一致（分批拼接保持输入顺序）
     const shas = all.slice(0, 201).reverse()

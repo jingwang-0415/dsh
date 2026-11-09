@@ -1,11 +1,14 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { cleanupTracked, trackTmp } from './fixture.js'
 import { isBranchExcluded, loadConfig } from '../src/config.js'
 
+afterEach(cleanupTracked)
+
 function writeConfig(json: unknown): string {
-  const dir = mkdtempSync(join(tmpdir(), 'gsm-config-'))
+  const dir = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-config-')))
   const file = join(dir, 'config.json')
   writeFileSync(file, JSON.stringify(json))
   return file
