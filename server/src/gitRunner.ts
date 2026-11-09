@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 
 export interface GitResult { stdout: string; stderr: string }
 
-export interface RunGitOptions { timeoutMs?: number; bin?: string; input?: string }
+export interface RunGitOptions { timeoutMs?: number; bin?: string; input?: string; env?: Record<string, string> }
 
 export class GitCommandError extends Error {
   constructor(readonly args: string[], readonly exitCode: number | null, readonly stderr: string) {
@@ -11,9 +11,15 @@ export class GitCommandError extends Error {
 }
 
 export async function runGit(cwd: string, args: string[], opts: RunGitOptions = {}): Promise<GitResult> {
-  const { timeoutMs = 60_000, bin = 'git', input } = opts
+  const { timeoutMs = 60_000, bin = 'git', input, env } = opts
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { cwd, stdio: [input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'] })
+    // env：存在时在 process.env 基础上覆盖（不整体替换——PATH 等系统变量必须继承，
+    // 否则 spawn 按名解析 git 失败）；不存在时不带 env 键，行为与调用方未传时逐字节一致
+    const spawnOpts: Parameters<typeof spawn>[2] = {
+      cwd, stdio: [input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      ...(env !== undefined && { env: { ...process.env, ...env } })
+    }
+    const child = spawn(bin, args, spawnOpts)
     child.stdin?.on('error', () => {})
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []

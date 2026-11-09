@@ -61,6 +61,18 @@ describe('loadConfig', () => {
         .toThrow(/id 不能为/)
     }
   })
+  it('传输兜底字段默认值：bypassGitConfig=false / httpProxy=\'\'（缺省不兜底，行为不变）', () => {
+    const cfg = loadConfig(writeConfig(valid))
+    expect(cfg.repos[0].bypassGitConfig).toBe(false)
+    expect(cfg.repos[0].httpProxy).toBe('')
+  })
+  it('传输兜底字段显式值解析保留（true / 代理串）', () => {
+    const cfg = loadConfig(writeConfig({
+      repos: [{ id: 'demo', url: 'ssh://git@example.com/demo.git', bypassGitConfig: true, httpProxy: 'http://p:1' }]
+    }))
+    expect(cfg.repos[0].bypassGitConfig).toBe(true)
+    expect(cfg.repos[0].httpProxy).toBe('http://p:1')
+  })
 })
 
 describe('isBranchExcluded', () => {

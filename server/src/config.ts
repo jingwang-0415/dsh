@@ -21,7 +21,11 @@ export const repoSchema = z.object({
   url: z.string().min(1),
   defaultBranch: z.string().min(1).default('master'),
   branchExclude: z.array(z.string()).default([]),
-  pollIntervalSeconds: z.number().int().min(5).max(MAX_POLL_INTERVAL_SECONDS, '轮询间隔上限 604800 秒（7 天）').default(30)
+  pollIntervalSeconds: z.number().int().min(5).max(MAX_POLL_INTERVAL_SECONDS, '轮询间隔上限 604800 秒（7 天）').default(30),
+  // 按仓传输兜底（v1.3.2）：缺省 false/'' 即不兜底，既有配置文件解析后行为不变。
+  // httpProxy '' 是合法显式值（强制无代理），故用 default('') 而非 optional
+  bypassGitConfig: z.boolean().default(false),
+  httpProxy: z.string().default('')
 })
 
 const configSchema = z.object({
@@ -85,11 +89,16 @@ export function isBranchExcluded(branch: string, patterns: string[]): boolean {
  */
 export function updateRepoFields(
   repo: RepoConfig,
-  patch: { pollIntervalSeconds?: number; defaultBranch?: string; branchExclude?: string[] }
+  patch: {
+    pollIntervalSeconds?: number; defaultBranch?: string; branchExclude?: string[]
+    bypassGitConfig?: boolean; httpProxy?: string
+  }
 ): void {
   Object.assign(repo, {
     ...(patch.pollIntervalSeconds !== undefined && { pollIntervalSeconds: patch.pollIntervalSeconds }),
     ...(patch.defaultBranch !== undefined && { defaultBranch: patch.defaultBranch }),
-    ...(patch.branchExclude !== undefined && { branchExclude: patch.branchExclude })
+    ...(patch.branchExclude !== undefined && { branchExclude: patch.branchExclude }),
+    ...(patch.bypassGitConfig !== undefined && { bypassGitConfig: patch.bypassGitConfig }),
+    ...(patch.httpProxy !== undefined && { httpProxy: patch.httpProxy })
   })
 }
