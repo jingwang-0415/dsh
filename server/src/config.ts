@@ -9,6 +9,11 @@ import { matchesGlob } from './util/glob.js'
 // 注意白名单正则会放行 '.' 与 '..'（审查 C1）：mirrorDirFor('..') = join(dataDir,'repos','..')
 // = dataDir 本身 → ensureMirror 见目录存在报 corrupt → rmSync 递归强删 = 清掉整个数据目录，
 // 故需 refine 显式拒绝
+// 上界 604800 = 7 天：Node 对 delay > 2^31-1ms 的 setTimeout 钳为 1ms，
+// pollIntervalSeconds ≥2,147,484 秒（约 24.85 天）会让调度器变成"每轮 fetch 完
+// 立刻 1ms 重排"的连续 fetch 循环打爆远端；api.ts PATCH 手写校验共享此常量
+export const MAX_POLL_INTERVAL_SECONDS = 604800
+
 export const repoSchema = z.object({
   id: z.string()
     .regex(/^[A-Za-z0-9._-]+$/, 'id 仅允许字母数字与 . _ -')
@@ -16,7 +21,7 @@ export const repoSchema = z.object({
   url: z.string().min(1),
   defaultBranch: z.string().min(1).default('master'),
   branchExclude: z.array(z.string()).default([]),
-  pollIntervalSeconds: z.number().int().min(5).default(30)
+  pollIntervalSeconds: z.number().int().min(5).max(MAX_POLL_INTERVAL_SECONDS, '轮询间隔上限 604800 秒（7 天）').default(30)
 })
 
 const configSchema = z.object({
@@ -68,4 +73,23 @@ export function writeConfig(path: string, cfg: AppConfig): void {
 
 export function isBranchExcluded(branch: string, patterns: string[]): boolean {
   return patterns.some(p => matchesGlob(branch, p))
+}
+
+/**
+ * 原位变更 repo 的可 PATCH 字段（仅赋提供的键，undefined 的键不写入）。
+ * **禁止整体替换对象**：app.ts 装配时把 config.repos 中的仓对象直接传给
+ * Scheduler({ repo })，deps.repo 与 config.repos 中的对象是同一引用；本函数用
+ * Object.assign 只改字段、不换对象，PATCH 后下一轮询周期即按新值调度。
+ * 若调用方用 splice/新对象替换，调度器仍持旧对象，运行时调整会静默失效。
+ * 值校验由调用方完成（api.ts PATCH 端点），这里只做字段级赋值。
+ */
+export function updateRepoFields(
+  repo: RepoConfig,
+  patch: { pollIntervalSeconds?: number; defaultBranch?: string; branchExclude?: string[] }
+): void {
+  Object.assign(repo, {
+    ...(patch.pollIntervalSeconds !== undefined && { pollIntervalSeconds: patch.pollIntervalSeconds }),
+    ...(patch.defaultBranch !== undefined && { defaultBranch: patch.defaultBranch }),
+    ...(patch.branchExclude !== undefined && { branchExclude: patch.branchExclude })
+  })
 }

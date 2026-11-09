@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import type Database from 'better-sqlite3'
-import { repoSchema, writeConfig, type AppConfig, type RepoConfig } from './config.js'
+import { MAX_POLL_INTERVAL_SECONDS, repoSchema, updateRepoFields, writeConfig, type AppConfig, type RepoConfig } from './config.js'
 import type { Scheduler } from './scheduler.js'
 import type { SseHub } from './sse.js'
 import type { PlatformAdapter } from './platform/types.js'
@@ -125,6 +125,86 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
     // 启动/POST 装配的 ON CONFLICT upsert 命中已有行，历史接续，不视为删除数据
     deps.removeScheduler(id)
     return { ok: true }
+  })
+
+  // PATCH：轮询间隔等属性运行时调整（v1.3.1）。核心是**原位变更**语义——config.repos
+  // 中的仓对象被 Scheduler.deps.repo 持同引用（app.ts 装配传入同一对象），updateRepoFields
+  // 只改字段不换对象，下一轮询周期即按新 pollIntervalSeconds 调度，defaultBranch/branchExclude
+  // 下一 fetch 周期生效；整体替换对象（splice/新对象）会静默断开调度器引用，严禁。
+  app.patch('/api/repos/:id', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const repo = config.repos.find(r => r.id === id)
+    if (!repo) return reply.code(404).send({ code: 'repo_not_found' })
+    const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>
+    // url/id 是仓的身份键（镜像目录名/调度器标识/API ?repo= 取值），替换即断链或串仓——
+    // 出现即拒绝（哪怕值与现状相同），换地址的唯一途径是删除后重新添加
+    if ('url' in body || 'id' in body) {
+      return reply.code(400).send({
+        code: 'url_immutable',
+        message: 'url 不可修改，请删除后重新添加以更换地址'
+      })
+    }
+    // 逐字段值校验（与 repoSchema 同阈值：整数 ≥5 / 非空字符串 / 字符串数组），透传 invalid
+    const patch: { pollIntervalSeconds?: number; defaultBranch?: string; branchExclude?: string[] } = {}
+    const issues: string[] = []
+    if (body.pollIntervalSeconds !== undefined) {
+      const n = body.pollIntervalSeconds
+      if (typeof n === 'number' && Number.isInteger(n) && n >= 5 && n <= MAX_POLL_INTERVAL_SECONDS) {
+        patch.pollIntervalSeconds = n
+      } else if (typeof n === 'number' && n > MAX_POLL_INTERVAL_SECONDS) {
+        // 超上界单独文案（与 repoSchema .max 同阈值）：604800 以上 setTimeout 会被钳成
+        // 1ms 紧循环，必须在此拒绝，防运行时把调度器打爆远端
+        issues.push(`pollIntervalSeconds: 轮询间隔上限 ${MAX_POLL_INTERVAL_SECONDS} 秒（7 天）`)
+      } else {
+        issues.push('pollIntervalSeconds: 需为 ≥5 的整数')
+      }
+    }
+    if (body.defaultBranch !== undefined) {
+      if (typeof body.defaultBranch === 'string' && body.defaultBranch.length > 0) {
+        patch.defaultBranch = body.defaultBranch
+      } else {
+        issues.push('defaultBranch: 需为非空字符串')
+      }
+    }
+    if (body.branchExclude !== undefined) {
+      if (Array.isArray(body.branchExclude) && body.branchExclude.every(x => typeof x === 'string')) {
+        patch.branchExclude = body.branchExclude
+      } else {
+        issues.push('branchExclude: 需为字符串数组')
+      }
+    }
+    if (issues.length > 0) {
+      return reply.code(400).send({ code: 'invalid', message: issues.join('; ') })
+    }
+    if (Object.keys(patch).length === 0) {
+      return reply.code(400).send({ code: 'no_fields', message: '无可更新字段（仅允许 pollIntervalSeconds/defaultBranch/branchExclude）' })
+    }
+    // 回滚纪律同 POST/DELETE：变更前 snapshot 旧三字段，writeConfig 失败 → 原位 assign 回旧值
+    // （仍是同一对象，调度器引用不断）+ 500，保持 config 内存与磁盘一致
+    const snapshot = {
+      pollIntervalSeconds: repo.pollIntervalSeconds,
+      defaultBranch: repo.defaultBranch,
+      branchExclude: repo.branchExclude
+    }
+    updateRepoFields(repo, patch)
+    try {
+      writeConfig(deps.configPath, config)
+    } catch (e) {
+      updateRepoFields(repo, snapshot)
+      return reply.code(500).send({ code: 'config_write_failed', message: (e as Error).message })
+    }
+    // DB repos 行同步 default_branch：沿用 v1.3 装配/POST 的 upsert 语句形态（url/created_at 不动，
+    // ON CONFLICT 命中挂载时登记的行）。branchExclude 不同步 DB——repos 表无该列（v1.3 schema 即如此），
+    // 其持久层是 config.json，运行时生效路径是原位变更后的共享对象
+    db.prepare(
+      `INSERT INTO repos (id, url, default_branch, created_at) VALUES (?,?,?,?)
+       ON CONFLICT(id) DO UPDATE SET default_branch=excluded.default_branch`
+    ).run(repo.id, repo.url, repo.defaultBranch, Date.now())
+    // 返回形状与 GET /api/repos 行一致（四字段 + branchExclude）
+    return {
+      id: repo.id, url: repo.url, defaultBranch: repo.defaultBranch,
+      branchExclude: repo.branchExclude, pollIntervalSeconds: repo.pollIntervalSeconds
+    }
   })
 
   app.get('/api/branches', async (req, reply) => {
