@@ -43,9 +43,33 @@ export interface CompareDto {
 
 export interface RepoDto { id: string; url: string; defaultBranch: string; pollIntervalSeconds: number }
 
+// v1.3 仓库生命周期：POST /api/repos 请求体。可选字段缺省 = 服务端 zod default（master/[]/30），
+// 前端按同款契约先行校验（id 白名单、url 非空）拦必败请求，服务端仍是唯一裁决
+export interface RepoConfigDto {
+  id: string
+  url: string
+  defaultBranch?: string
+  branchExclude?: string[]
+  pollIntervalSeconds?: number
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url)
   if (!res.ok) throw new Error(`${url} -> ${res.status}`)
+  return res.json() as Promise<T>
+}
+
+// 非 GET 请求共用：错误体为 { code, message? }——message 透传（400 校验详情/500 写失败），
+// 缺省回退 code（409 repo_exists 无 message），再缺退 HTTP 状态
+async function sendJson<T>(url: string, method: 'POST' | 'DELETE', body?: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method,
+    ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  })
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => null)) as { code?: string; message?: string } | null
+    throw new Error(payload?.message ?? payload?.code ?? `HTTP ${res.status}`)
+  }
   return res.json() as Promise<T>
 }
 
@@ -90,7 +114,11 @@ export const api = {
     if (p.include?.length) u.set('include', p.include.join(','))
     if (p.exclude?.length) u.set('exclude', p.exclude.join(','))
     return getJson(`/api/crossrepo/compare?${u.toString()}`)
-  }
+  },
+  // 仓库生命周期（契约见 server/test/reposapi.test.ts）：201 返回全字段仓；400/409/500 抛 message/code
+  addRepo: (body: RepoConfigDto): Promise<RepoDto> => sendJson('/api/repos', 'POST', body),
+  // id 进路径：encodeURIComponent 纪律（与 withRepo 查询串转义同源）
+  removeRepo: (id: string): Promise<{ ok: true }> => sendJson(`/api/repos/${encodeURIComponent(id)}`, 'DELETE')
 }
 
 export function formatRelative(ts: number, now = Date.now()): string {
