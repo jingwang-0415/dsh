@@ -69,3 +69,22 @@ export function writeConfig(path: string, cfg: AppConfig): void {
 export function isBranchExcluded(branch: string, patterns: string[]): boolean {
   return patterns.some(p => matchesGlob(branch, p))
 }
+
+/**
+ * 原位变更 repo 的可 PATCH 字段（仅赋提供的键，undefined 的键不写入）。
+ * **禁止整体替换对象**：app.ts 装配时把 config.repos 中的仓对象直接传给
+ * Scheduler({ repo })，deps.repo 与 config.repos 中的对象是同一引用；本函数用
+ * Object.assign 只改字段、不换对象，PATCH 后下一轮询周期即按新值调度。
+ * 若调用方用 splice/新对象替换，调度器仍持旧对象，运行时调整会静默失效。
+ * 值校验由调用方完成（api.ts PATCH 端点），这里只做字段级赋值。
+ */
+export function updateRepoFields(
+  repo: RepoConfig,
+  patch: { pollIntervalSeconds?: number; defaultBranch?: string; branchExclude?: string[] }
+): void {
+  Object.assign(repo, {
+    ...(patch.pollIntervalSeconds !== undefined && { pollIntervalSeconds: patch.pollIntervalSeconds }),
+    ...(patch.defaultBranch !== undefined && { defaultBranch: patch.defaultBranch }),
+    ...(patch.branchExclude !== undefined && { branchExclude: patch.branchExclude })
+  })
+}

@@ -204,3 +204,134 @@ describe('DELETE 最后一个仓（configSchema repos min(1) 保底）', () => {
     expect(handle.schedulers[0].repoId).toBe('only')
   })
 })
+
+describe('PATCH /api/repos/:id（运行时调整轮询间隔与分支属性，原位变更语义）', () => {
+  let o: ReturnType<typeof createOriginRepo>
+  let configPath: string
+  let dataDir: string
+  let handle: AppHandle
+
+  interface RepoRow {
+    id: string; url: string; defaultBranch: string; branchExclude: string[]; pollIntervalSeconds: number
+  }
+
+  beforeAll(async () => {
+    o = createOriginRepo('gsm-patch-')
+    o.commitFile('p.txt', 'p')   // 同秒同内容 SHA 碰撞规避（multirepo 先例）
+    const dir = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-patch-')))
+    configPath = join(dir, 'config.json')
+    writeFileSync(configPath, JSON.stringify({ repos: [{ id: 'p1', url: o.dir }] }))
+    dataDir = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-patch-data-')))
+    handle = await buildApp({ configPath, dataDir })
+  })
+
+  // 只关停：临时目录由外层 cleanupTracked 统一清理；构建期 schedulers 不 start，无在飞写入
+  afterAll(async () => { await handle.close() })
+
+  /** 读原路径 config.json 首仓（PATCH 会原子回写该文件，断言即验证回写行为） */
+  const onDiskRepo = (): RepoRow => {
+    const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as { repos: RepoRow[] }
+    return cfg.repos[0]
+  }
+
+  it('PATCH 未知 id → 404 repo_not_found', async () => {
+    const res = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/ghost', payload: { pollIntervalSeconds: 10 }
+    })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toMatchObject({ code: 'repo_not_found' })
+  })
+
+  it('PATCH body 含 url → 400 url_immutable（message 断言，内存不被改动）', async () => {
+    const res = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/p1', payload: { url: '/somewhere/else' }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toEqual({
+      code: 'url_immutable',
+      message: 'url 不可修改，请删除后重新添加以更换地址'
+    })
+    expect(handle.config.repos[0].url).toBe(o.dir)
+  })
+
+  it('PATCH body 含 id → 400 url_immutable（同族：身份键一律不可 PATCH）', async () => {
+    const res = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/p1', payload: { id: 'renamed' }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'url_immutable' })
+  })
+
+  it('PATCH 空 body → 400 no_fields', async () => {
+    const res = await handle.app.inject({ method: 'PATCH', url: '/api/repos/p1', payload: {} })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'no_fields' })
+  })
+
+  it('PATCH pollIntervalSeconds=0 / "abc" → 400 invalid，非法值不落内存', async () => {
+    for (const bad of [0, 'abc']) {
+      const res = await handle.app.inject({
+        method: 'PATCH', url: '/api/repos/p1', payload: { pollIntervalSeconds: bad }
+      })
+      expect(res.statusCode).toBe(400)
+      expect(res.json()).toMatchObject({ code: 'invalid' })
+    }
+    expect(handle.config.repos[0].pollIntervalSeconds).toBe(30)
+  })
+
+  it('PATCH 合法 → 200 新值；config 文件与 DB default_branch 同步；config.repos 中仍是原对象（原位变更锁）', async () => {
+    const repoRef = handle.config.repos.find(r => r.id === 'p1')
+    expect(repoRef).toBeDefined()
+    const res = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/p1',
+      payload: { pollIntervalSeconds: 7, defaultBranch: 'main', branchExclude: ['tmp/**'] }
+    })
+    expect(res.statusCode).toBe(200)
+    // 返回形状与 GET /api/repos 行一致（四字段 + branchExclude）
+    expect(res.json()).toEqual({
+      id: 'p1', url: o.dir, defaultBranch: 'main', branchExclude: ['tmp/**'], pollIntervalSeconds: 7
+    })
+
+    // 原位变更锁：config.repos 中仍是同一对象引用——Scheduler.deps.repo 持同引用，
+    // 下一轮询周期才按新 pollIntervalSeconds 调度；整体替换对象会让此处拿到旧对象
+    expect(handle.config.repos[0]).toBe(repoRef)
+    expect(repoRef!.pollIntervalSeconds).toBe(7)
+    expect(repoRef!.defaultBranch).toBe('main')
+    expect(repoRef!.branchExclude).toEqual(['tmp/**'])
+    expect(repoRef!.url).toBe(o.dir)
+
+    // config 文件回写：新三字段 + url/id 未变
+    expect(onDiskRepo()).toEqual({
+      id: 'p1', url: o.dir, defaultBranch: 'main', branchExclude: ['tmp/**'], pollIntervalSeconds: 7
+    })
+
+    // DB repos 行 default_branch 同步（readonly 断言）。
+    // 注：repos 表无 branch_exclude 列（v1.3 schema 即如此），branchExclude 的持久层是 config.json
+    const db = new Database(join(dataDir, 'monitor.db'), { readonly: true })
+    try {
+      const row = db.prepare(`SELECT default_branch FROM repos WHERE id='p1'`).get() as { default_branch: string }
+      expect(row.default_branch).toBe('main')
+    } finally { db.close() }
+  })
+
+  it('引用语义锁：PATCH 后同一仓再次 PATCH → 仍 200，只更新提供的键（防整体替换断引用回归）', async () => {
+    const repoRef = handle.config.repos[0]
+    const res = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/p1', payload: { pollIntervalSeconds: 11 }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({
+      id: 'p1', pollIntervalSeconds: 11, defaultBranch: 'main', branchExclude: ['tmp/**']
+    })
+    // 若上次 PATCH 整体替换了对象，repoRef 会停在旧值——新值必须落在同一对象上
+    expect(repoRef.pollIntervalSeconds).toBe(11)
+    expect(handle.config.repos[0]).toBe(repoRef)
+
+    // GET /api/repos（读 config）与磁盘文件都反映最新值
+    const list = await handle.app.inject({ method: 'GET', url: '/api/repos' })
+    expect(list.json()[0]).toEqual({
+      id: 'p1', url: o.dir, defaultBranch: 'main', branchExclude: ['tmp/**'], pollIntervalSeconds: 11
+    })
+    expect(onDiskRepo().pollIntervalSeconds).toBe(11)
+  })
+})
