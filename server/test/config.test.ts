@@ -40,6 +40,13 @@ describe('loadConfig', () => {
     }
     expect(() => loadConfig(writeConfig(dup))).toThrow(/repo id 必须唯一/)
   })
+  it('pollIntervalSeconds=604801 超上界 → 报错含 604800 文案（防 setTimeout >2^31-1 钳制紧循环）', () => {
+    // Node 对 delay > 2^31-1ms 的 setTimeout 钳为 1ms：无上界时 ≥2147484 秒（约 24.85 天）
+    // 会让调度器变成"每轮 fetch 完立刻 1ms 重排"的连续 fetch 循环，故钳上界 7 天
+    expect(() => loadConfig(writeConfig({
+      repos: [{ id: 'demo', url: 'ssh://git@example.com/demo.git', pollIntervalSeconds: 604801 }]
+    }))).toThrow(/604800/)
+  })
   it('repo id 越白名单（../ 逃逸、空格）报错并含白名单文案', () => {
     // id 同时是 mirror 目录名：../demo 会逃出 repos/ 根目录
     for (const id of ['../demo', 'a b']) {

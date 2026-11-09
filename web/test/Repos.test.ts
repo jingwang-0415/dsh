@@ -207,4 +207,27 @@ describe('Repos 视图（仓库管理）', () => {
 
     expect(fetchMock.mock.calls.some(c => methodOf(c) === 'PATCH')).toBe(false)
   })
+
+  it('前端先行校验：间隔超上限 604801 拦在本地不发 PATCH；下界 5 合法放行', async () => {
+    const { wrapper, fetchMock } = await mountView()
+    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+    const save = async (): Promise<void> => {
+      await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+      await flushPromises()
+    }
+
+    // 超上界（604800 = 7 天）本地拦截，横幅文案含 604800，零 PATCH 发出
+    await wrapper.find('.edit-interval').setValue('604801')
+    await save()
+    expect(wrapper.find('.banner-red').text()).toContain('604800')
+    expect(fetchMock.mock.calls.some(c => methodOf(c) === 'PATCH')).toBe(false)
+
+    // 下界边界值 5 合法：本地不拦，PATCH 载荷按 5 发出
+    await wrapper.find('.edit-interval').setValue('5')
+    await save()
+    expect(wrapper.find('.banner-red').exists()).toBe(false)
+    const patchCall = fetchMock.mock.calls.find(c => methodOf(c) === 'PATCH')
+    expect(patchCall).toBeDefined()
+    expect(JSON.parse(String((patchCall![1] as RequestInit).body))).toMatchObject({ pollIntervalSeconds: 5 })
+  })
 })

@@ -9,6 +9,11 @@ import { matchesGlob } from './util/glob.js'
 // 注意白名单正则会放行 '.' 与 '..'（审查 C1）：mirrorDirFor('..') = join(dataDir,'repos','..')
 // = dataDir 本身 → ensureMirror 见目录存在报 corrupt → rmSync 递归强删 = 清掉整个数据目录，
 // 故需 refine 显式拒绝
+// 上界 604800 = 7 天：Node 对 delay > 2^31-1ms 的 setTimeout 钳为 1ms，
+// pollIntervalSeconds ≥2,147,484 秒（约 24.85 天）会让调度器变成"每轮 fetch 完
+// 立刻 1ms 重排"的连续 fetch 循环打爆远端；api.ts PATCH 手写校验共享此常量
+export const MAX_POLL_INTERVAL_SECONDS = 604800
+
 export const repoSchema = z.object({
   id: z.string()
     .regex(/^[A-Za-z0-9._-]+$/, 'id 仅允许字母数字与 . _ -')
@@ -16,7 +21,7 @@ export const repoSchema = z.object({
   url: z.string().min(1),
   defaultBranch: z.string().min(1).default('master'),
   branchExclude: z.array(z.string()).default([]),
-  pollIntervalSeconds: z.number().int().min(5).default(30)
+  pollIntervalSeconds: z.number().int().min(5).max(MAX_POLL_INTERVAL_SECONDS, '轮询间隔上限 604800 秒（7 天）').default(30)
 })
 
 const configSchema = z.object({

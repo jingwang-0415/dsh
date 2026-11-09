@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import type Database from 'better-sqlite3'
-import { repoSchema, updateRepoFields, writeConfig, type AppConfig, type RepoConfig } from './config.js'
+import { MAX_POLL_INTERVAL_SECONDS, repoSchema, updateRepoFields, writeConfig, type AppConfig, type RepoConfig } from './config.js'
 import type { Scheduler } from './scheduler.js'
 import type { SseHub } from './sse.js'
 import type { PlatformAdapter } from './platform/types.js'
@@ -148,8 +148,13 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
     const patch: { pollIntervalSeconds?: number; defaultBranch?: string; branchExclude?: string[] } = {}
     const issues: string[] = []
     if (body.pollIntervalSeconds !== undefined) {
-      if (typeof body.pollIntervalSeconds === 'number' && Number.isInteger(body.pollIntervalSeconds) && body.pollIntervalSeconds >= 5) {
-        patch.pollIntervalSeconds = body.pollIntervalSeconds
+      const n = body.pollIntervalSeconds
+      if (typeof n === 'number' && Number.isInteger(n) && n >= 5 && n <= MAX_POLL_INTERVAL_SECONDS) {
+        patch.pollIntervalSeconds = n
+      } else if (typeof n === 'number' && n > MAX_POLL_INTERVAL_SECONDS) {
+        // 超上界单独文案（与 repoSchema .max 同阈值）：604800 以上 setTimeout 会被钳成
+        // 1ms 紧循环，必须在此拒绝，防运行时把调度器打爆远端
+        issues.push(`pollIntervalSeconds: 轮询间隔上限 ${MAX_POLL_INTERVAL_SECONDS} 秒（7 天）`)
       } else {
         issues.push('pollIntervalSeconds: 需为 ≥5 的整数')
       }

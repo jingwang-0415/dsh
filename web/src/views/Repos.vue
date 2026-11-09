@@ -107,12 +107,17 @@ function cancelEdit(): void {
   error.value = ''
 }
 
-// 前端先行校验同后端阈值（整数 ≥5 / 非空分支），拦掉必败请求；服务端仍是唯一裁决。
+// 前端先行校验同后端阈值（整数 ≥5 / 上限 604800=7 天，与 repoSchema .max / PATCH 校验
+// 同阈值 / 非空分支），拦掉必败请求；服务端仍是唯一裁决。
+// 上界防 setTimeout >2^31-1ms 钳 1ms：≥2147484 秒会让调度器变连续 fetch 循环。
 // v-model 在 type=number 输入上会自动数值化（looseToNumber），故先 String() 归一再校验
+const MAX_POLL_INTERVAL_SECONDS = 604800
+
 function validateEdit(): string {
   const raw = String(editInterval.value).trim()
   const n = Number(raw)
   if (!raw || !Number.isInteger(n) || n < 5) return '轮询间隔须为不小于 5 的整数秒'
+  if (n > MAX_POLL_INTERVAL_SECONDS) return `轮询间隔上限 ${MAX_POLL_INTERVAL_SECONDS} 秒（7 天）`
   if (!editBranch.value.trim()) return '默认分支不能为空'
   return ''
 }

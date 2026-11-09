@@ -334,4 +334,25 @@ describe('PATCH /api/repos/:id（运行时调整轮询间隔与分支属性，�
     })
     expect(onDiskRepo().pollIntervalSeconds).toBe(11)
   })
+
+  it('PATCH pollIntervalSeconds=604801 超上界 → 400 invalid 且消息含 604800（与 repoSchema .max 同阈值）', async () => {
+    const res = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/p1', payload: { pollIntervalSeconds: 604801 }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'invalid' })
+    expect((res.json() as { message: string }).message).toContain('604800')
+    // 非法值不落内存（沿用既有断言模式）
+    expect(handle.config.repos[0].pollIntervalSeconds).toBe(11)
+  })
+
+  it('PATCH pollIntervalSeconds=5 → 200（最小合法值边界锁定），其余键不动', async () => {
+    const res = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/p1', payload: { pollIntervalSeconds: 5 }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({ id: 'p1', pollIntervalSeconds: 5, defaultBranch: 'main', branchExclude: ['tmp/**'] })
+    expect(handle.config.repos[0].pollIntervalSeconds).toBe(5)
+    expect(onDiskRepo().pollIntervalSeconds).toBe(5)
+  })
 })
