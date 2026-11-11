@@ -244,7 +244,17 @@ describe('Repos 视图（仓库管理）', () => {
     expect(JSON.parse(String((patchCall![1] as RequestInit).body))).toMatchObject({ pollIntervalSeconds: 5 })
   })
 
-  it('传输（高级）：勾选直连且代理留空 → POST 载荷 bypassGitConfig:true + httpProxy:""（强制无代理）', async () => {
+  it('网络连接方式：下拉默认跟随系统且三选项齐全（省键/无代理/自定义）', async () => {
+    const { wrapper } = await mountView()
+    const sel = wrapper.find('.add-proxy-mode')
+    expect(sel.exists()).toBe(true)
+    expect((sel.element as HTMLSelectElement).value).toBe('system')
+    expect(sel.findAll('option').map(o => o.text())).toEqual([
+      '跟随系统 git 配置', '强制直连（无代理）', '通过代理服务器连接'
+    ])
+  })
+
+  it('网络连接方式：勾选绕过系统 git 配置（默认跟随系统）→ POST bypassGitConfig:true 且 httpProxy 省键', async () => {
     const { wrapper, fetchMock } = await mountView()
     await wrapper.find('input[placeholder="repo-id"]').setValue('beta')
     await wrapper.find('input[placeholder="https://example.com/beta.git"]').setValue('https://example.com/beta.git')
@@ -254,26 +264,52 @@ describe('Repos 视图（仓库管理）', () => {
 
     const call = fetchMock.mock.calls.find(c => methodOf(c) === 'POST')
     expect(call).toBeDefined()
+    // bypass 与代理三态正交：仅勾绕过不隐含 httpProxy:''（跟随系统态省键，v1.4 解耦旧直连语义）
     expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({
-      id: 'beta', url: 'https://example.com/beta.git', bypassGitConfig: true, httpProxy: ''
+      id: 'beta', url: 'https://example.com/beta.git', bypassGitConfig: true
     })
   })
 
-  it('传输（高级）：填 http://… 显式代理 → 载荷带 httpProxy 值（未勾直连 bypassGitConfig:false）', async () => {
+  it('网络连接方式：选强制直连（无代理）→ POST httpProxy:""；该态不渲染代理输入框', async () => {
     const { wrapper, fetchMock } = await mountView()
     await wrapper.find('input[placeholder="repo-id"]').setValue('beta')
     await wrapper.find('input[placeholder="https://example.com/beta.git"]').setValue('https://example.com/beta.git')
-    await wrapper.find('.add-proxy').setValue('http://127.0.0.1:8080')
+    await wrapper.find('.add-proxy-mode').setValue('none')
+    expect(wrapper.find('.add-proxy').exists()).toBe(false)   // 输入框仅 custom 态显现
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
     const call = fetchMock.mock.calls.find(c => methodOf(c) === 'POST')
     expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({
-      id: 'beta', url: 'https://example.com/beta.git', bypassGitConfig: false, httpProxy: 'http://127.0.0.1:8080'
+      id: 'beta', url: 'https://example.com/beta.git', bypassGitConfig: false, httpProxy: ''
     })
   })
 
-  it('表格传输列：bypassGitConfig→直连徽标、httpProxy 非空→代理徽标、缺省/空串→—', async () => {
+  it('网络连接方式：选通过代理服务器连接但地址为空 → 本地拦截不发 POST；填 http://p:9 → 载荷带值', async () => {
+    const { wrapper, fetchMock } = await mountView()
+    await wrapper.find('input[placeholder="repo-id"]').setValue('beta')
+    await wrapper.find('input[placeholder="https://example.com/beta.git"]').setValue('https://example.com/beta.git')
+    // 跟随系统态不渲染代理输入框；custom 态显现
+    expect(wrapper.find('.add-proxy').exists()).toBe(false)
+    await wrapper.find('.add-proxy-mode').setValue('custom')
+    expect(wrapper.find('.add-proxy').exists()).toBe(true)
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.find('.banner-red').text()).toContain('代理地址不能为空')
+    expect(fetchMock.mock.calls.some(c => methodOf(c) === 'POST')).toBe(false)
+
+    await wrapper.find('.add-proxy').setValue('http://p:9')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    const call = fetchMock.mock.calls.find(c => methodOf(c) === 'POST')
+    expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({
+      id: 'beta', url: 'https://example.com/beta.git', bypassGitConfig: false, httpProxy: 'http://p:9'
+    })
+  })
+
+  it('表格传输列四态：bypass→直连、httpProxy 非空→代理、""→无代理、省键→—（不再合流）', async () => {
     const { wrapper } = await mountView({
       reposList: [
         { id: 'r1', url: 'u1', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30 },
@@ -284,12 +320,12 @@ describe('Repos 视图（仓库管理）', () => {
     })
     const cells = wrapper.findAll('tbody tr').map(row => row.find('.transport-cell').text())
     expect(cells[0]).toBe('—')            // GET 行省键（T1：undefined=跟随系统）→ —
-    expect(cells[1]).toContain('直连')
-    expect(cells[2]).toContain('代理')
-    expect(cells[3]).toBe('—')            // httpProxy ''=强制无代理但非"代理"标记，未勾直连 → —
+    expect(cells[1]).toContain('直连')     // bypass → 直连
+    expect(cells[2]).toContain('代理')     // 非空 → 代理
+    expect(cells[3]).toContain('无代理')   // httpProxy ''=显式强制无代理（v1.4 四态，不再与 — 合流）
   })
 
-  it('行内编辑传输字段：预填当前值；保存 PATCH 带 bypassGitConfig/httpProxy（改值与直连空代理两轮）', async () => {
+  it('行内编辑网络连接方式：预填映射三态；保存 PATCH 三轮（改值/强制直连 ""/跟随系统省键）', async () => {
     const { wrapper, fetchMock } = await mountView({
       reposList: [
         { id: 'r1', url: 'u1', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, httpProxy: 'http://old:1' }
@@ -297,11 +333,12 @@ describe('Repos 视图（仓库管理）', () => {
     })
     await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
 
-    // 预填：GET 行省 bypassGitConfig 键 → unchecked（?? false 兜底）；httpProxy 键在 → 原值
-    expect((wrapper.find('.edit-bypass').element as HTMLInputElement).checked).toBe(false)
+    // 预填映射：httpProxy 非空 → custom 态 + 输入框回填原值；bypass 省键 → unchecked
+    expect((wrapper.find('.edit-proxy-mode').element as HTMLSelectElement).value).toBe('custom')
     expect((wrapper.find('.edit-proxy').element as HTMLInputElement).value).toBe('http://old:1')
+    expect((wrapper.find('.edit-bypass').element as HTMLInputElement).checked).toBe(false)
 
-    // 第一轮：显式换代理值（未勾直连）→ PATCH 带 bypassGitConfig:false + httpProxy 新值
+    // 第一轮：custom 态改值（未勾绕过）→ PATCH 带 bypassGitConfig:false + httpProxy 新值
     await wrapper.find('.edit-proxy').setValue('http://new:2')
     await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
     await flushPromises()
@@ -311,18 +348,44 @@ describe('Repos 视图（仓库管理）', () => {
       bypassGitConfig: false, httpProxy: 'http://new:2'
     })
 
-    // 第二轮：保存后列表刷新（stub 静态回同一行 → 预填回 http://old:1）→ 清空代理、勾直连
-    // → httpProxy:''（直连+留空 = 强制无代理分支）
+    // 第二轮：切"强制直连（无代理）"（stub 静态回 http://old:1 → 预填仍 custom）→ PATCH httpProxy:''（bypass 独立保持 false）
     await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
-    await wrapper.find('.edit-proxy').setValue('')
-    await wrapper.find('.edit-bypass').setValue(true)
+    await wrapper.find('.edit-proxy-mode').setValue('none')
     await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
     await flushPromises()
     const patchCalls = fetchMock.mock.calls.filter(c => methodOf(c) === 'PATCH')
     expect(patchCalls).toHaveLength(2)
     expect(JSON.parse(String((patchCalls[1][1] as RequestInit).body))).toEqual({
       pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [],
-      bypassGitConfig: true, httpProxy: ''
+      bypassGitConfig: false, httpProxy: ''
     })
+
+    // 第三轮：切回"跟随系统 git 配置" → PATCH 省键 httpProxy（toEqual 无键断言；服务端语义=不改动）
+    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+    await wrapper.find('.edit-proxy-mode').setValue('system')
+    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+    const patchCalls3 = fetchMock.mock.calls.filter(c => methodOf(c) === 'PATCH')
+    expect(patchCalls3).toHaveLength(3)
+    expect(JSON.parse(String((patchCalls3[2][1] as RequestInit).body))).toEqual({
+      pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [], bypassGitConfig: false
+    })
+  })
+
+  it('行内编辑：省键行预填跟随系统态；选通过代理服务器连接但地址为空 → 本地拦截不发 PATCH', async () => {
+    const { wrapper, fetchMock } = await mountView()   // reposPayload r1 无 httpProxy 键
+    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+
+    // 预填映射：省键（undefined=跟随系统）→ system 态且不渲染代理输入框
+    expect((wrapper.find('.edit-proxy-mode').element as HTMLSelectElement).value).toBe('system')
+    expect(wrapper.find('.edit-proxy').exists()).toBe(false)
+
+    await wrapper.find('.edit-proxy-mode').setValue('custom')
+    expect(wrapper.find('.edit-proxy').exists()).toBe(true)   // 仅 custom 态显现
+    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.banner-red').text()).toContain('代理地址不能为空')
+    expect(fetchMock.mock.calls.some(c => methodOf(c) === 'PATCH')).toBe(false)
   })
 })
