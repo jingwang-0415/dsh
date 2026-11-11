@@ -44,6 +44,7 @@ export function createSseHub(): SseHub {
               clients.delete(res)
             }
           }
+          stopHeartbeatIfIdle()   // sweep 摘除后停表闭环（与 close/error 事件路径对称）
         }, 25_000)
         timer.unref()   // 不阻止进程优雅退出
       }
@@ -63,6 +64,7 @@ export function createSseHub(): SseHub {
           clients.delete(res)
         }
       }
+      stopHeartbeatIfIdle()   // 摘除（destroyed/抛错分支）后停表闭环（与 close/error 事件路径对称）
     },
     clientCount() { return clients.size },
     // 优雅退出用：hijack 的 SSE 连接对 Fastify 非 idle，app.close() 会永久等待；

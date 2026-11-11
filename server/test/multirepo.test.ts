@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
 import { buildApp } from '../src/app.js'
 import type { AppHandle } from '../src/app.js'
@@ -31,6 +31,10 @@ describe('多仓调度与 repo 作用域（真实 git）', () => {
   })
 
   afterAll(async () => { await handle.close(); cleanupTracked() })   // 目录在 beforeAll 建、文件级共享：关停后统一清理
+
+  // v1.4 测试卫生：spy 恢复收敛到 afterEach——用例中途断言失败也不泄漏 mock（原内联
+  // mockRestore 只在用例 happy path 尾部执行）；restoreAllMocks 覆盖本文件全部 vi.spyOn
+  afterEach(() => { vi.restoreAllMocks() })
 
   it('两个 scheduler 各自回填各自的仓', async () => {
     const r1 = await handle.app.inject({ method: 'GET', url: '/api/branches?repo=r1' })
@@ -82,6 +86,5 @@ describe('多仓调度与 repo 作用域（真实 git）', () => {
       ([e, d]) => e === 'status.changed' && (d as { repoId?: string }).repoId === 'r2' && (d as { state?: string }).state === 'idle'
     )
     expect(statusIdle.length).toBeGreaterThan(0)
-    publish.mockRestore()
-  })
+  })   // publish spy 恢复由 afterEach 统一收敛
 })

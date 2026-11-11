@@ -1,9 +1,11 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer } from 'node:net'
+import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { GitCommandError, pipeRunGit, runGit } from '../src/gitRunner.js'
-import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
+import { cleanupTracked, createOriginRepo, trackTmp, withProxyEnvCleared } from './fixture.js'
 import { ensureMirror } from '../src/mirror.js'
 
 afterEach(cleanupTracked)
@@ -25,6 +27,31 @@ describe('runGit', () => {
     await expect(runGit('.', ['5'], { timeoutMs: 100, bin: 'sleep' })).rejects.toThrow(/超时/)
   })
 
+  it('超时路径错误消息同样凭证脱敏（plain Error 亦套 sanitize）', async () => {
+    // fix round 1：超时 plain Error 的 message 同拼 args.join、同样进 fetch_events.last_error，
+    // 与 GitCommandError 是同漏洞类。真实 git + 本地黑洞 listener（accept 后不响应）确定性挂起，
+    // 短 timeoutMs 触发超时路径——connection refused 会立即失败走 GitCommandError，复现不了超时。
+    // 最终批次：导出代理 env 且 no_proxy 未豁免 127.0.0.1 的环境里 git 走代理转发（探针实证
+    // 连的是代理端口而非目标端口），严格/拒环回代理会快速失败为 GitCommandError，同样复现不了
+    // 超时——套用 withProxyEnvCleared（与 mirror.test 劫持用例同款）清空代理 env 保证确定性
+    const server = createServer(() => { /* 黑洞：不写不关 */ })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+    try {
+      await withProxyEnvCleared(async () => {
+        const err = await runGit('.', ['ls-remote', `https://user:secretToken@127.0.0.1:${port}/x.git`], { timeoutMs: 300 })
+          .catch((e: unknown) => e)
+        expect(err).toBeInstanceOf(Error)
+        expect(err).not.toBeInstanceOf(GitCommandError)
+        expect((err as Error).message).toContain('超时')
+        expect((err as Error).message).toContain('***@')
+        expect((err as Error).message).not.toContain('secretToken')
+      })
+    } finally {
+      server.close()
+    }
+  })
+
   it('超时后孙进程持管道也必须 settle（销毁我方流强制 close）', async () => {
     // 线上实证（fix round 2）：git fetch 超时 SIGKILL 直接子进程后，孙进程 git remote-https
     // 继承并持有 stdio 管道写端 → 'close' 要等孙进程退出才触发 → Promise 永不 settle
@@ -44,6 +71,31 @@ describe('runGit', () => {
     writeFileSync(bigFile, expected, 'utf8')
     const r = await runGit('.', [bigFile], { bin: 'cat' })
     expect(r.stdout).toBe(expected)
+  })
+
+  it('GitCommandError message 脱敏内嵌凭据（args 与 stderr 均过 sanitize），stderr 字段保持原样', async () => {
+    // 探针实证：现代 git 在 transport 错误里自会抹掉 userinfo（'unable to access' 不回显凭据），
+    // 真实泄漏面是我方 message 拼装的 args.join（RED 实证含原始 token）；stderr 侧 sanitize 为防御性保留。
+    // 端到端触发用 connection refused（127.0.0.1:1，~30ms 确定性失败）——invalid.invalid 的 DNS
+    // 失败时延随环境波动（1.2s → >5s 超时），不可作测试依赖
+    const err = await runGit('.', ['ls-remote', 'https://user:secretToken@127.0.0.1:1/x.git'])
+      .catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(GitCommandError)
+    const msg = (err as GitCommandError).message
+    expect(msg).toContain('***@')
+    expect(msg).not.toContain('secretToken')
+
+    // "stderr 字段保持原样"契约在构造器层钉住：git 自身已脱敏 transport 错误 stderr，
+    // 端到端无法构造"stderr 含原始 token"的真实场景；生产侧唯一拼装点即构造器，
+    // 直接构造即可钉住分界——message 脱敏、字段不脱敏（依赖 stderr 原样的调用方不受影响）
+    const ctor = new GitCommandError(
+      ['fetch', 'https://u:secretToken@host.invalid/x.git'],
+      128,
+      'stderr echo: https://u:secretToken@host.invalid/x.git'
+    )
+    expect(ctor.message).toContain('***@')
+    expect(ctor.message).not.toContain('secretToken')
+    expect(ctor.stderr).toContain('secretToken')
   })
 })
 

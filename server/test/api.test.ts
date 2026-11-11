@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -94,6 +95,50 @@ describe('API 集成（真实 git fixture）', () => {
     expect(ok.statusCode).toBe(200)
     expect(ok.json()).toHaveLength(1)
   })
+
+  it('GET /api/commits limit=1000 钳制为 ≤500 行（200）', async () => {
+    // 大仓 fixture：git fast-import 秒建 501 提交（逐个 commit 需 501 次 spawn，太慢）；
+    // 未钳制时 limit=1000 会全量返回 501 行（RED 实证），钳制后恰 500
+    const origin = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-biglog-')))
+    const git = (args: string[], input?: string): void => {
+      const r = spawnSync('git', args, { cwd: origin, encoding: 'utf8', input })
+      if (r.status !== 0) throw new Error(`fixture git ${args.join(' ')} 失败: ${r.stderr}`)
+    }
+    git(['init', '--initial-branch=master'])
+    const N = 501
+    let stream = ''
+    for (let i = 1; i <= N; i++) {
+      const blobData = `content ${i}\n`
+      const msgData = `commit ${i}\n`
+      stream += `blob\nmark :${i * 2 - 1}\ndata ${Buffer.byteLength(blobData)}\n${blobData}`
+      stream += `commit refs/heads/master\nmark :${i * 2}\n`
+      stream += 'author T <t@t> 1600000000 +0000\ncommitter T <t@t> 1600000000 +0000\n'
+      stream += `data ${Buffer.byteLength(msgData)}\n${msgData}`
+      if (i > 1) stream += `from :${(i - 1) * 2}\n`
+      stream += `M 100644 :${i * 2 - 1} f.txt\n`
+    }
+    stream += 'done\n'
+    git(['fast-import', '--quiet'], stream)
+
+    const dataDir = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-biglog-data-')))
+    const h = await buildApp({
+      configOverride: {
+        repos: [{ id: 'biglog', url: origin, defaultBranch: 'master', branchExclude: [], pollIntervalSeconds: 30 }],
+        server: { host: '127.0.0.1', port: 0 }
+      },
+      dataDir
+    })
+    try {
+      await h.schedulers[0].runOnce()   // 首轮克隆镜像
+      const res = await h.app.inject({ method: 'GET', url: '/api/commits?branch=master&limit=1000' })
+      expect(res.statusCode).toBe(200)
+      const rows = res.json()
+      expect(rows.length).toBeLessThanOrEqual(500)
+      expect(rows.length).toBe(500)     // 501 提交实证被钳到上限（未钳制时 501）
+    } finally {
+      await h.close()
+    }
+  }, { timeout: 20_000 })
 
   it('buildApp 幂等登记 repos：同 id 改 URL 走 upsert 且 created_at 保留', async () => {
     const dataDir = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-upsert-')))

@@ -71,6 +71,17 @@ describe('CrossRepo 视图', () => {
     expect(url).toContain('exclude=vendor%2F**')
   })
 
+  it('onlyIn 行 RouterLink 对象式 :to：query 值经 vue-router 统一编码，href 精确匹配', async () => {
+    // 串拼接的 bug 类：repo id 含 & 会把查询串劈成两个参数（?repo=a&b → repo=a + b）；
+    // 对象式 :to 由 vue-router 统一编码（a%26b），此处以 href 全等断言锁定（消 toContain 子串弱点）
+    const { wrapper } = await mountView(`?repoA=${encodeURIComponent('a&b')}&repoB=gte`)
+    const links = wrapper.findAll('a').filter(l => (l.attributes('href') ?? '').startsWith('/commit/'))
+    expect(links).toHaveLength(2)   // onlyInA / onlyInB 各一条
+
+    expect(links[0].attributes('href')).toBe(`/commit/${'a'.repeat(40)}?repo=a%26b`)   // onlyInA 行带 repoA 归属
+    expect(links[1].attributes('href')).toBe(`/commit/${'b'.repeat(40)}?repo=gte`)     // onlyInB 行带 repoB 归属
+  })
+
   it('切仓后 URL 回写新默认分支（paired[0]），消除 branchA=&branchB= 空参形态', async () => {
     const { wrapper, router } = await mountView('?repoA=gh&repoB=gte&branchA=feat&branchB=main')
     const selects = wrapper.findAll('select')

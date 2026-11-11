@@ -90,12 +90,15 @@ export function isBranchExcluded(branch: string, patterns: string[]): boolean {
  * Object.assign 只改字段、不换对象，PATCH 后下一轮询周期即按新值调度。
  * 若调用方用 splice/新对象替换，调度器仍持旧对象，运行时调整会静默失效。
  * 值校验由调用方完成（api.ts PATCH 端点），这里只做字段级赋值。
+ * httpProxy null 分支（JSON Merge Patch 风格显式 unset）：delete 摘除字段回到
+ * "跟随系统 git 配置"，config.json 回写时 undefined 键自然省略（JSON.stringify 行为）；
+ * RepoConfig.httpProxy 为 optional，delete 合法且不破坏原对象引用。
  */
 export function updateRepoFields(
   repo: RepoConfig,
   patch: {
     pollIntervalSeconds?: number; defaultBranch?: string; branchExclude?: string[]
-    bypassGitConfig?: boolean; httpProxy?: string
+    bypassGitConfig?: boolean; httpProxy?: string | null
   }
 ): void {
   Object.assign(repo, {
@@ -103,6 +106,8 @@ export function updateRepoFields(
     ...(patch.defaultBranch !== undefined && { defaultBranch: patch.defaultBranch }),
     ...(patch.branchExclude !== undefined && { branchExclude: patch.branchExclude }),
     ...(patch.bypassGitConfig !== undefined && { bypassGitConfig: patch.bypassGitConfig }),
-    ...(patch.httpProxy !== undefined && { httpProxy: patch.httpProxy })
+    ...(typeof patch.httpProxy === 'string' && { httpProxy: patch.httpProxy })
   })
+  // 显式 null = unset（null 不是 undefined，二者语义必须区分：缺省不动 / null 删字段）
+  if (patch.httpProxy === null) delete repo.httpProxy
 }

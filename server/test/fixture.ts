@@ -42,3 +42,25 @@ export function createOriginRepo(prefix = 'gsm-origin-'): OriginRepo {
   commitFile('README.md', '# demo\n')
   return { dir, git, commitFile }
 }
+
+// —— 代理环境变量确定性（v1.4 最终修复批次）——
+// runGit/mirror 系用例 spawn 真实 git 且继承本进程 env：导出 http(s)_proxy 且 no_proxy 未
+// 豁免目标主机（如 127.0.0.1）的环境里，git 走代理转发而非直连，黑洞超时/劫持用例的预期
+// 路径会被代理行为改写（如快速失败为 GitCommandError，复现不了超时）。清空代理 env 保证
+// 跨环境确定性（no_proxy 等环境变量会遮蔽代理行为）。
+const PROXY_ENV_KEYS = [
+  'http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
+  'no_proxy', 'NO_PROXY'
+]
+
+/** 清空代理环境变量执行 fn（子进程继承本进程 env；完成后原样恢复，原本未设的键不留痕） */
+export async function withProxyEnvCleared(fn: () => Promise<void>): Promise<void> {
+  const saved = new Map<string, string | undefined>()
+  for (const k of PROXY_ENV_KEYS) { saved.set(k, process.env[k]); delete process.env[k] }
+  try { await fn() } finally {
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  }
+}

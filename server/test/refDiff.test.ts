@@ -50,4 +50,16 @@ describe('classifyChange（真实 git）', () => {
     const c = await classifyChange(mirrorDir, { type: 'updated', branch: 'master', oldSha, newSha: amended })
     expect(c).toEqual({ type: 'force-push', branch: 'master', oldSha, newSha: amended })
   })
+
+  it('镜像目录不存在（spawn ENOENT）→ rejects，不误标 force-push', async () => {
+    // 归因分级契约：基础设施故障（spawn ENOENT/超时，非 GitCommandError 的 plain Error）
+    // 必须重抛给 scheduler.runOnce 按失败轮退避；静默吞成 force-push 会污染分支归因
+    // （探针实证：cwd 不存在 → child 'error' 事件 spawn git ENOENT，非 GitCommandError）
+    const base = trackTmp(mkdtempSync(join(tmpdir(), 'gsm-mirror-missing-')))
+    await expect(
+      classifyChange(join(base, 'nope.git'), {
+        type: 'updated', branch: 'master', oldSha: 'a'.repeat(40), newSha: 'b'.repeat(40)
+      })
+    ).rejects.toThrow(/ENOENT/)
+  })
 })
