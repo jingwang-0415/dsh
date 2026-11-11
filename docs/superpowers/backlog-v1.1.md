@@ -138,3 +138,28 @@
 - review-package 打包脚本注明实际提交数（squash 包含表述与多提交历史不符，两次复审者被误导）
 - task-brief 预生成固定为派发前动作（本周期两次遗漏）
 - 需求映射表显式处置未决 carry（勿静默滚存）
+
+---
+
+# v1.4 收官附录（2026-11-11，加固与体验批次）
+
+## 已交付
+
+- classifyChange 归因分级：exitCode 1/128（非祖先/镜像缺对象）→ force-push；spawn error/timeout → rethrow 走调度器失败轮退避（基础设施故障不再误标 rewritten + 漏收提交）
+- GitCommandError/超时消息凭证脱敏（sanitize 三层：构造器/超时/pipeRunGit，fetch_events 与 UI 泄漏面封死）
+- /api/commits limit 钳制 [1,500]（NaN/0/负数 400，超量静默钳制）
+- SSE 心跳停表闭环：publish/sweep 摘除后补 stopHeartbeatIfIdle（三路停止收敛）
+- 代理三态下拉「网络连接方式」（跟随系统/强制直连/自定义代理）——PATCH 棱角、表格 '—' 合流、undefined→'' 迁移一并解决；PATCH httpProxy null 显式 unset + snapshot ?? null 哨兵
+- UX 批次：Enter 保存、CrossRepo 对象式 :to（消 & 劈查询串 bug 类）、切仓横幅守卫（双落笔路径）、Overview 三分支测试、multirepo afterEach、reposapi 文件级清理、传输字段注释修正、黑洞测试代理 env 清空（共享 util）
+- v1.0 carry 三项全部闭环（最终审查核实 ✓）
+
+## v1.5 池（v1.4 最终审查 recommendations）
+
+- 快照对账机制（周期比对 DB head_sha vs 镜像 head——classify 分级后残余的检出推进丢失窗口）
+- bypass+代理双设行显示与用例；.edit-proxy Enter；branchExclude:[] 清空测试；死参数清理；limit 500 魔数常量化
+- 直连措辞碰撞（bypass checkbox vs 三态直连——机制不同，文案区分）；POST 契约类型层 null 表达
+- 进程组 kill（孤儿清剿终态，需 detached 权衡）；runGit input 路径 stdin 销毁对称（生产无 input 调用点，理论角落）
+
+## 流程备注
+
+- 门禁实践：代理劫持机器上跑聚焦测试后再宣布全绿（黑洞测试 flake 曾在对抗 env 下复现——已修）
