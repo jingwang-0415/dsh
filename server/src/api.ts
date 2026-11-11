@@ -292,9 +292,12 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
     if (!Number.isInteger(limit) || limit < 1 || !Number.isInteger(offset) || offset < 0) {
       return reply.code(400).send({ code: 'bad_request', message: 'limit/offset 需为整数（limit≥1，offset≥0）' })
     }
+    // 超上限静默钳制（500）：超大 limit 不再等价于整分支全量 rev-list（资源放大防线）；
+    // 400 语义仍留给负数/非整数（上方校验不变）
+    const clampedLimit = Math.min(Math.max(limit, 1), 500)
     try {
       const commits = await listCommits(deps.mirrorDirFor(repo.id), `refs/heads/${q.branch}`, {
-        maxCount: limit, skip: offset
+        maxCount: clampedLimit, skip: offset
       })
       return commits.map(c => mapCommit(toDbRowShape(c)))
     } catch (e) {

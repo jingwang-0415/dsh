@@ -4,9 +4,19 @@ export interface GitResult { stdout: string; stderr: string }
 
 export interface RunGitOptions { timeoutMs?: number; bin?: string; input?: string; env?: Record<string, string> }
 
+/**
+ * 凭证脱敏：把 URL 内嵌凭据段（scheme://userinfo@ → ***@）抹掉。
+ * 仅用于 message 展示层拼装（args.join / stderr）；GitCommandError.stderr 字段保持原样
+ * （调用方无 UI 直出 stderr，fetch_events 持久化的是 error.message，已脱敏即达标）
+ */
+export function sanitize(s: string): string {
+  return s.replace(/(https?|ssh):\/\/[^@\s/]+@/g, '***@')
+}
+
 export class GitCommandError extends Error {
   constructor(readonly args: string[], readonly exitCode: number | null, readonly stderr: string) {
-    super(`git ${args.join(' ')} 失败 (code=${exitCode}): ${stderr.trim()}`)
+    // message 是会进日志/DB 持久化（fetch_events.last_error）的传播面，args 与 stderr 两处都过 sanitize
+    super(`git ${sanitize(args.join(' '))} 失败 (code=${exitCode}): ${sanitize(stderr.trim())}`)
   }
 }
 
@@ -34,6 +44,9 @@ export async function runGit(cwd: string, args: string[], opts: RunGitOptions = 
       // 即使孙进程仍持对端 fd）；非超时路径不经此处，自然 close 流程零改动
       child.stdout?.destroy()
       child.stderr?.destroy()
+      // input 路径对称：stdin 也是我方管道端，一并销毁（input!==undefined 时必存在），
+      // 杜绝带 -f/--stdin 等输入型命令超时后 stdin 残留挂起
+      child.stdin?.destroy()
     }, timeoutMs)
     child.stdout!.on('data', (d: Buffer) => { stdoutChunks.push(d) })
     child.stderr!.on('data', (d: Buffer) => { stderrChunks.push(d) })

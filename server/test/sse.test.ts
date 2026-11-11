@@ -115,4 +115,42 @@ describe('SseHub', () => {
       vi.useRealTimers()
     }
   })
+
+  it('publish 摘除 destroyed 客户端后心跳停表（定时器归零，advance 无 :ping）', () => {
+    // 停表闭环：clients 清空必须 clearInterval，否则空转定时器常驻（写计数无法区分——
+    // 空集 sweep 本就不产生写入，故用 vi.getTimerCount() 直接断言定时器归零）
+    vi.useFakeTimers()
+    try {
+      const hub = createSseHub()
+      const a = fakeReply()
+      const b = fakeReply()
+      hub.add(a.reply)
+      hub.add(b.reply)
+      expect(vi.getTimerCount()).toBe(1)
+      ;(a.reply.raw as unknown as { destroyed: boolean }).destroyed = true
+      ;(b.reply.raw as unknown as { destroyed: boolean }).destroyed = true
+      expect(() => hub.publish('status.changed', {})).not.toThrow()
+      expect(hub.clientCount()).toBe(0)
+      expect(vi.getTimerCount()).toBe(0)   // 摘除后停表
+      vi.advanceTimersByTime(25_000)
+      expect(a.writes.every(w => !w.includes(':ping'))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ping sweep 摘除 destroyed 客户端后心跳停表', () => {
+    vi.useFakeTimers()
+    try {
+      const hub = createSseHub()
+      const a = fakeReply()
+      hub.add(a.reply)
+      ;(a.reply.raw as unknown as { destroyed: boolean }).destroyed = true
+      vi.advanceTimersByTime(25_000)   // sweep tick 摘除 destroyed 客户端
+      expect(hub.clientCount()).toBe(0)
+      expect(vi.getTimerCount()).toBe(0)   // 摘除后停表
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

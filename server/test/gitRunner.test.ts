@@ -45,6 +45,31 @@ describe('runGit', () => {
     const r = await runGit('.', [bigFile], { bin: 'cat' })
     expect(r.stdout).toBe(expected)
   })
+
+  it('GitCommandError message 脱敏内嵌凭据（args 与 stderr 均过 sanitize），stderr 字段保持原样', async () => {
+    // 探针实证：现代 git 在 transport 错误里自会抹掉 userinfo（'unable to access' 不回显凭据），
+    // 真实泄漏面是我方 message 拼装的 args.join（RED 实证含原始 token）；stderr 侧 sanitize 为防御性保留。
+    // 端到端触发用 connection refused（127.0.0.1:1，~30ms 确定性失败）——invalid.invalid 的 DNS
+    // 失败时延随环境波动（1.2s → >5s 超时），不可作测试依赖
+    const err = await runGit('.', ['ls-remote', 'https://user:secretToken@127.0.0.1:1/x.git'])
+      .catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(GitCommandError)
+    const msg = (err as GitCommandError).message
+    expect(msg).toContain('***@')
+    expect(msg).not.toContain('secretToken')
+
+    // "stderr 字段保持原样"契约在构造器层钉住：git 自身已脱敏 transport 错误 stderr，
+    // 端到端无法构造"stderr 含原始 token"的真实场景；生产侧唯一拼装点即构造器，
+    // 直接构造即可钉住分界——message 脱敏、字段不脱敏（依赖 stderr 原样的调用方不受影响）
+    const ctor = new GitCommandError(
+      ['fetch', 'https://u:secretToken@host.invalid/x.git'],
+      128,
+      'stderr echo: https://u:secretToken@host.invalid/x.git'
+    )
+    expect(ctor.message).toContain('***@')
+    expect(ctor.message).not.toContain('secretToken')
+    expect(ctor.stderr).toContain('secretToken')
+  })
 })
 
 describe('pipeRunGit 双进程流式', () => {
