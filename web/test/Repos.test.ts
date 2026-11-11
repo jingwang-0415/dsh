@@ -246,6 +246,26 @@ describe('Repos 视图（仓库管理）', () => {
     expect(JSON.parse(String((patchCall![1] as RequestInit).body))).toMatchObject({ pollIntervalSeconds: 5 })
   })
 
+  it('行内编辑输入 Enter 保存：三个编辑输入 keyup.enter 均触发 onSave 发 PATCH', async () => {
+    // 覆盖三个可编辑输入（默认分支/轮询间隔/排除 glob）：Enter 与"保存"按钮走同一 onSave 路径
+    for (const sel of ['.edit-branch', '.edit-interval', '.edit-exclude']) {
+      const { wrapper, fetchMock } = await mountView()
+      await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+      await wrapper.find(sel).trigger('keyup.enter')
+      await flushPromises()
+
+      const patch = fetchMock.mock.calls.find(c => methodOf(c) === 'PATCH')
+      expect(patch).toBeDefined()   // RED：无 Enter 接线时不发 PATCH
+      expect(urlOf(patch!)).toBe('/api/repos/r1')
+      // 预填值合法 → PATCH 载荷即当前行值；成功后退出编辑态
+      expect(JSON.parse(String((patch![1] as RequestInit).body))).toEqual({
+        pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [],
+        bypassGitConfig: false, httpProxy: null
+      })
+      expect(wrapper.find('.edit-branch').exists()).toBe(false)
+    }
+  })
+
   it('网络连接方式：下拉默认跟随系统且三选项齐全（省键/无代理/自定义）', async () => {
     const { wrapper } = await mountView()
     const sel = wrapper.find('.add-proxy-mode')

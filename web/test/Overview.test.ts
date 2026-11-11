@@ -21,7 +21,10 @@ class FakeEventSource {
   close(): void {}
 }
 
-interface FetchOpts { syncResult?: { ok: boolean; json: unknown } }
+interface FetchOpts {
+  syncResult?: { ok: boolean; json: unknown }
+  reposList?: { id: string; url: string; defaultBranch: string; branchExclude: string[]; pollIntervalSeconds: number }[]
+}
 
 function stubFetch(opts: FetchOpts = {}) {
   return vi.fn(async (url: string, init?: RequestInit) => {
@@ -31,7 +34,7 @@ function stubFetch(opts: FetchOpts = {}) {
     }
     if (url.startsWith('/api/status')) return { ok: true, json: async () => statusPayload }
     if (url.startsWith('/api/branches')) return { ok: true, json: async () => [] }
-    if (url === '/api/repos') return { ok: true, json: async () => reposPayload }
+    if (url === '/api/repos') return { ok: true, json: async () => opts.reposList ?? reposPayload }
     return { ok: true, json: async () => ({}) }
   })
 }
@@ -110,5 +113,82 @@ describe('Overview 手动同步按钮（v1.3.2）', () => {
     const note = wrapper.find('.sync-note')
     expect(note.classes()).toContain('banner-red')
     expect(note.text()).toContain('同步失败：fetch boom')
+  })
+
+  it('sendJson 通道抛错（fetch reject）→ 红色"同步失败：<message>"', async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') throw new Error('network boom')
+      if (url.startsWith('/api/status')) return { ok: true, json: async () => statusPayload }
+      if (url.startsWith('/api/branches')) return { ok: true, json: async () => [] }
+      if (url === '/api/repos') return { ok: true, json: async () => reposPayload }
+      return { ok: true, json: async () => ({}) }
+    })
+    const { wrapper } = await mountView({}, fetchMock)
+    await syncButton(wrapper).trigger('click')
+    await flushPromises()
+    const note = wrapper.find('.sync-note')
+    expect(note.exists()).toBe(true)
+    expect(note.classes()).toContain('banner-red')
+    expect(note.text()).toContain('同步失败：network boom')
+  })
+
+  it('newCommits=0 → 灰色"手动同步完成：无新提交"', async () => {
+    const { wrapper } = await mountView({ syncResult: { ok: true, json: { ok: true, newCommits: 0 } } })
+    await syncButton(wrapper).trigger('click')
+    await flushPromises()
+    const note = wrapper.find('.sync-note')
+    expect(note.exists()).toBe(true)
+    expect(note.classes()).toContain('banner-gray')
+    expect(note.text()).toContain('手动同步完成：无新提交')
+  })
+
+  it('在飞切仓：切仓即清横幅；旧仓迟到结果不落新仓语境（守卫不回写）', async () => {
+    let release!: () => void
+    const gate = new Promise<void>(res => { release = res })
+    let postCount = 0
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        postCount += 1
+        if (postCount === 1) return { ok: true, json: async () => ({ ok: true, newCommits: 2 }) }
+        await gate   // 第二次 POST 挂起在飞，制造切仓窗口
+        return { ok: true, json: async () => ({ ok: true, newCommits: 5 }) }
+      }
+      if (url.startsWith('/api/status')) return { ok: true, json: async () => statusPayload }
+      if (url.startsWith('/api/branches')) return { ok: true, json: async () => [] }
+      if (url === '/api/repos') {
+        return {
+          ok: true,
+          json: async () => [
+            { id: 'r1', url: 'u', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30 },
+            { id: 'r2', url: 'u', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30 }
+          ]
+        }
+      }
+      return { ok: true, json: async () => ({}) }
+    })
+    const { wrapper } = await mountView({}, fetchMock)
+    const btn = syncButton(wrapper)
+
+    // 第一轮：正常完成 → 绿横幅落笔（旧仓语境的既有结果）
+    await btn.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.sync-note').classes()).toContain('banner-green')
+
+    // 第二轮：在飞（POST 挂起）→ 切仓
+    const click = btn.trigger('click')
+    await flushPromises()
+    await wrapper.findAll('select')[0].setValue('r2')   // onRepoChange：清横幅 + 回写 query + refresh
+    await flushPromises()
+    expect(wrapper.find('.sync-note').exists()).toBe(false)   // 切仓即清（既有行为保持）
+
+    // 旧仓结果迟到落地：守卫拦截，横幅不得回写到新仓语境
+    release()
+    await click
+    await flushPromises()
+    expect(wrapper.find('.sync-note').exists()).toBe(false)   // 守卫（切仓后旧结果不落新仓）
+    expect(btn.attributes('disabled')).toBeUndefined()        // finally 仍收敛 syncing
+    const posts = fetchMock.mock.calls.filter(c => ((c[1] as RequestInit | undefined)?.method) === 'POST')
+    expect(posts).toHaveLength(2)
+    expect(posts.every(c => c[0] === '/api/repos/r1/sync')).toBe(true)   // 两次都发往旧仓（发起时捕获）
   })
 })

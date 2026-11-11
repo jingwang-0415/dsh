@@ -42,7 +42,8 @@ describe('仓库生命周期 API（真实 config 文件 fixture）', () => {
     handle = await buildApp({ configPath, dataDir })
   })
 
-  afterAll(async () => { await handle.close(); cleanupTracked() })
+  // 只关停：临时目录由文件级 afterAll cleanupTracked 统一清理（本文件末尾，close 先行）
+  afterAll(async () => { await handle.close() })
 
   /** 等首轮 runOnce 落定（addScheduler 已 start）：避免 close 时仍在飞行写 DB */
   async function awaitSettled(id: string): Promise<string> {
@@ -261,7 +262,7 @@ describe('DELETE 最后一个仓（configSchema repos min(1) 保底）', () => {
     })
   })
 
-  // 只关停：临时目录由外层 describe 的 afterAll cleanupTracked 统一清理
+  // 只关停：临时目录由文件级 afterAll cleanupTracked 统一清理（不再依赖外层 describe 的执行顺序）
   afterAll(async () => { await handle.close() })
 
   it('DELETE 唯一仓 → 409 last_repo，config 文件未改动且 scheduler 不动', async () => {
@@ -299,7 +300,7 @@ describe('PATCH /api/repos/:id（运行时调整轮询间隔与分支属性，�
     handle = await buildApp({ configPath, dataDir })
   })
 
-  // 只关停：临时目录由外层 cleanupTracked 统一清理；构建期 schedulers 不 start，无在飞写入
+  // 只关停：临时目录由文件级 afterAll cleanupTracked 统一清理；构建期 schedulers 不 start，无在飞写入
   afterAll(async () => { await handle.close() })
 
   /** 读原路径 config.json 首仓（PATCH 会原子回写该文件，断言即验证回写行为） */
@@ -536,7 +537,7 @@ describe('POST /api/repos/:id/sync（v1.3.2 手动同步）', () => {
     })
   })
 
-  // 只关停：临时目录由外层 cleanupTracked 统一清理；schedulers 从未 start，close 时无在飞 runOnce
+  // 只关停：临时目录由文件级 afterAll cleanupTracked 统一清理；schedulers 从未 start，close 时无在飞 runOnce
   afterAll(async () => { await handle.close() })
 
   it('未知仓 → 404 repo_not_found', async () => {
@@ -586,3 +587,9 @@ describe('POST /api/repos/:id/sync（v1.3.2 手动同步）', () => {
     expect(body.error!.length).toBeGreaterThan(0)
   })
 })
+
+// v1.4 测试卫生：文件级收尾——各 describe 的 handle.close()（describe 级 afterAll）先行，
+// 此处统一 rmSync 全部 tracked 临时目录。原 cleanupTracked 挂在首个 describe 的 afterAll，
+// 清理契约依赖 describe 执行顺序（其余 describe 只能"恰好"在其后运行）；收敛到文件级后
+// 顺序耦合消除（vitest 文件级 afterAll 恒晚于全部 describe 级 afterAll）
+afterAll(() => cleanupTracked())

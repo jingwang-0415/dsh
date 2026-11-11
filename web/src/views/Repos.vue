@@ -239,11 +239,11 @@ onMounted(() => { void refresh() })
           <td><code>{{ r.id }}</code></td>
           <!-- url 身份键不可改：编辑态保持只读文本 + title 提示，绝不渲染输入框 -->
           <td class="url-cell" :title="editingId === r.id ? URL_IMMUTABLE_HINT : undefined">{{ r.url }}</td>
-          <td v-if="editingId === r.id"><input class="edit-branch" v-model="editBranch" /></td>
+          <td v-if="editingId === r.id"><input class="edit-branch" v-model="editBranch" @keyup.enter="onSave" /></td>
           <td v-else>{{ r.defaultBranch }}</td>
-          <td v-if="editingId === r.id"><input class="edit-interval" v-model="editInterval" type="number" min="5" step="1" /></td>
+          <td v-if="editingId === r.id"><input class="edit-interval" v-model="editInterval" type="number" min="5" step="1" @keyup.enter="onSave" /></td>
           <td v-else>{{ r.pollIntervalSeconds }}s</td>
-          <td v-if="editingId === r.id"><input class="edit-exclude" v-model="editExclude" /></td>
+          <td v-if="editingId === r.id"><input class="edit-exclude" v-model="editExclude" @keyup.enter="onSave" /></td>
           <td v-else class="muted">{{ r.branchExclude?.join(',') || '—' }}</td>
           <!-- v1.4 网络连接方式列：编辑态就地给绕过 checkbox + 代理三态下拉（输入框仅 custom 态）；
                展示态四态（直连=绕过/代理=非空/无代理=''/—=省键跟随系统）。

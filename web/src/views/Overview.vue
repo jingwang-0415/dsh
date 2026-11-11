@@ -81,8 +81,12 @@ const syncNote = ref<{ cls: string; text: string } | null>(null)
 async function onSyncNow(): Promise<void> {
   if (syncing.value || !repoId.value) return
   syncing.value = true
+  // v1.4 切仓守卫：发起前捕获目标仓；横幅落笔前比对当前仓——在飞切仓后，旧仓的迟到
+  // 结果不得落进新仓语境（onRepoChange 只清得掉"已落笔"的横幅，拦不住 await 之后的回写）
+  const targetRepo = repoId.value
   try {
-    const r = await api.syncRepo(repoId.value)
+    const r = await api.syncRepo(targetRepo)
+    if (repoId.value !== targetRepo) return   // 切仓守卫：已离开目标仓 → 本轮结果整体不落横幅
     if (!r.ok) {
       syncNote.value = { cls: 'banner-red', text: `同步失败：${r.error ?? '未知错误'}` }
     } else if (r.skipped) {
@@ -94,7 +98,9 @@ async function onSyncNow(): Promise<void> {
       syncNote.value = { cls: 'banner-gray', text: '手动同步完成：无新提交' }
     }
   } catch (e) {
-    // sendJson 通道抛错（网络断开/HTTP 非 200）：message 透传（契约 message 优先 code 兜底）
+    // sendJson 通道抛错（网络断开/HTTP 非 200）：message 透传（契约 message 优先 code 兜底）；
+    // 抛错路径同款守卫——横幅只属于发起时所在的仓
+    if (repoId.value !== targetRepo) return
     syncNote.value = { cls: 'banner-red', text: `同步失败：${(e as Error).message}` }
   } finally {
     syncing.value = false

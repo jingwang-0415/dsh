@@ -141,7 +141,9 @@ onMounted(async () => {
           <h3>{{ result.branchPair.repoA }} 独有（{{ result.onlyInA.length }}）</h3>
           <ul class="rows">
             <li v-for="c in result.onlyInA" :key="c.sha" class="row">
-              <RouterLink :to="`/commit/${c.sha}${repoA ? `?repo=${repoA}` : ''}`"><code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}</RouterLink>
+              <!-- 对象式 :to（v1.4）：query 交给 vue-router 统一编码——串拼接对 repo id 含
+                   & 等保留字符会把查询串劈成两段；repo 未定（空串）时省 query，与旧语义一致 -->
+              <RouterLink :to="{ path: '/commit/' + c.sha, query: repoA ? { repo: repoA } : undefined }"><code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}</RouterLink>
               <span class="muted"> {{ c.authorName }} · {{ formatRelative(c.committedAt) }}</span>
             </li>
             <li v-if="result.onlyInA.length === 0" class="muted">（无）</li>
@@ -151,7 +153,7 @@ onMounted(async () => {
           <h3>{{ result.branchPair.repoB }} 独有（{{ result.onlyInB.length }}）</h3>
           <ul class="rows">
             <li v-for="c in result.onlyInB" :key="c.sha" class="row">
-              <RouterLink :to="`/commit/${c.sha}${repoB ? `?repo=${repoB}` : ''}`"><code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}</RouterLink>
+              <RouterLink :to="{ path: '/commit/' + c.sha, query: repoB ? { repo: repoB } : undefined }"><code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}</RouterLink>
               <span class="muted"> {{ c.authorName }} · {{ formatRelative(c.committedAt) }}</span>
             </li>
             <li v-if="result.onlyInB.length === 0" class="muted">（无）</li>
