@@ -165,10 +165,12 @@ describe('Repos 视图（仓库管理）', () => {
     expect(i).toBeGreaterThan(-1)
     expect(urlOf(calls[i])).toBe('/api/repos/r1')
     // 载荷白名单（无 url/id）；排除 glob 逗号拆分为字符串数组；
-    // v1.3.2 传输两键恒带 boolean/按三分支——默认行无传输配置 → bypassGitConfig:false、httpProxy 省键
+    // v1.3.2 传输两键恒带 boolean/按三分支——默认行无传输配置 → bypassGitConfig:false、
+    // 编辑态下拉预填 system → PATCH 显式 httpProxy:null（JSON Merge Patch unset，服务端
+    // 对已无该字段的仓 delete 为无操作，幂等；省键承载不了"还原跟随系统"语义故不再省）
     expect(JSON.parse(String((calls[i][1] as RequestInit).body))).toEqual({
       pollIntervalSeconds: 7, defaultBranch: 'develop', branchExclude: ['tmp/**', 'dist/**'],
-      bypassGitConfig: false
+      bypassGitConfig: false, httpProxy: null
     })
     // 保存成功 → 退出编辑态 + 刷新列表（PATCH 之后再次 GET /api/repos）
     expect(wrapper.find('.edit-branch').exists()).toBe(false)
@@ -325,7 +327,7 @@ describe('Repos 视图（仓库管理）', () => {
     expect(cells[3]).toContain('无代理')   // httpProxy ''=显式强制无代理（v1.4 四态，不再与 — 合流）
   })
 
-  it('行内编辑网络连接方式：预填映射三态；保存 PATCH 三轮（改值/强制直连 ""/跟随系统省键）', async () => {
+  it('行内编辑网络连接方式：预填映射三态；保存 PATCH 三态载荷（自定义值/强制直连 ""/跟随系统 null 显式 unset）', async () => {
     const { wrapper, fetchMock } = await mountView({
       reposList: [
         { id: 'r1', url: 'u1', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, httpProxy: 'http://old:1' }
@@ -360,16 +362,20 @@ describe('Repos 视图（仓库管理）', () => {
       bypassGitConfig: false, httpProxy: ''
     })
 
-    // 第三轮：切回"跟随系统 git 配置" → PATCH 省键 httpProxy（toEqual 无键断言；服务端语义=不改动）
+    // 第三轮：切回"跟随系统 git 配置" → PATCH 显式 httpProxy:null（JSON Merge Patch unset——
+    // 修复三态编辑缺口：已设代理的仓可经 UI 还原为跟随系统；省键=服务端不改动，不能承载该语义）
     await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
     await wrapper.find('.edit-proxy-mode').setValue('system')
     await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
     await flushPromises()
     const patchCalls3 = fetchMock.mock.calls.filter(c => methodOf(c) === 'PATCH')
     expect(patchCalls3).toHaveLength(3)
-    expect(JSON.parse(String((patchCalls3[2][1] as RequestInit).body))).toEqual({
-      pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [], bypassGitConfig: false
+    const body3 = JSON.parse(String((patchCalls3[2][1] as RequestInit).body))
+    expect(body3).toEqual({
+      pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [],
+      bypassGitConfig: false, httpProxy: null
     })
+    expect('httpProxy' in body3).toBe(true)   // 键显式在场且为 null——省键会被服务端理解为"不改动"
   })
 
   it('行内编辑：省键行预填跟随系统态；选通过代理服务器连接但地址为空 → 本地拦截不发 PATCH', async () => {

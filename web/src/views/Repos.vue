@@ -21,11 +21,19 @@ const formProxy = ref('')
 // 代理三态载荷构造（v1.4，POST 与 PATCH 共用同一构造；契约见 server repoSchema/PATCH：
 // undefined=跟随系统 git 配置、''=强制无代理、非空=显式代理）：
 // - bypassGitConfig 恒带 boolean（"是否绕过系统 git 配置"独立开关，与代理三态正交）
-// - system → 省略 httpProxy 键；none → httpProxy:''；custom → httpProxy:<输入值>
-//   （custom 且输入为空被 validate 先行拦截，此处兜底按省键处理——绝不静默降级成另一态）
-function transportFields(bypass: boolean, mode: ProxyMode, proxyRaw: string): { bypassGitConfig: boolean; httpProxy?: string } {
+// - custom → httpProxy:<输入值>；none → httpProxy:''
+// - system 态按目标分：PATCH → httpProxy:null（JSON Merge Patch 显式 unset，服务端删字段，
+//   已设代理的仓可经 UI 还原为跟随系统；省键会被服务端理解为"不改动"，承载不了该语义）；
+//   POST → 省键（新建即跟随系统）。custom 且输入为空被 validate 先行拦截，此处兜底按省键
+//   处理——绝不静默降级成另一态
+function transportFields(bypass: boolean, mode: ProxyMode, proxyRaw: string, target: 'post' | 'patch'): { bypassGitConfig: boolean; httpProxy?: string | null } {
   const proxy = proxyRaw.trim()
-  return { bypassGitConfig: bypass, ...(mode === 'custom' && proxy ? { httpProxy: proxy } : mode === 'none' ? { httpProxy: '' } : {}) }
+  const proxyField: { httpProxy?: string | null } =
+    mode === 'custom' && proxy ? { httpProxy: proxy }
+      : mode === 'none' ? { httpProxy: '' }
+        : target === 'patch' ? { httpProxy: null }
+          : {}
+  return { bypassGitConfig: bypass, ...proxyField }
 }
 
 // T1 裁定：GET 行 httpProxy 未设省键（DTO optional）——读取一律经此兜底，
@@ -80,7 +88,7 @@ async function onAdd(): Promise<void> {
   const globs = formExclude.value.split(',').map(s => s.trim()).filter(Boolean)
   if (globs.length) body.branchExclude = globs
   if (formInterval.value.trim()) body.pollIntervalSeconds = Number(formInterval.value)
-  Object.assign(body, transportFields(formBypass.value, formProxyMode.value, formProxy.value))
+  Object.assign(body, transportFields(formBypass.value, formProxyMode.value, formProxy.value, 'post'))
   try {
     await api.addRepo(body)
     formId.value = ''; formUrl.value = ''; formBranch.value = ''; formInterval.value = ''; formExclude.value = ''
@@ -164,12 +172,13 @@ async function onSave(): Promise<void> {
   if (v) { error.value = v; return }
   try {
     // 载荷白名单（无 url/id）；排除 glob 逗号拆分（与添加表单同款 filter(Boolean) 语义）；
-    // 传输两键经 transportFields 同一三态构造（省键=服务端不改动）
+    // 传输两键经 transportFields 同一三态构造（patch 目标：跟随系统发 httpProxy:null 显式
+    // unset——省键=服务端不改动，承载不了"还原跟随系统"）
     await api.updateRepo(editingId.value, {
       pollIntervalSeconds: Number(String(editInterval.value).trim()),
       defaultBranch: editBranch.value.trim(),
       branchExclude: editExclude.value.split(',').map(s => s.trim()).filter(Boolean),
-      ...transportFields(editBypass.value, editProxyMode.value, editProxy.value)
+      ...transportFields(editBypass.value, editProxyMode.value, editProxy.value, 'patch')
     })
     editingId.value = ''
     error.value = ''
@@ -197,7 +206,8 @@ onMounted(() => { void refresh() })
       <!-- v1.4 网络连接方式（原"传输（高级）"改名，用户反馈旧命名不可理解）：
            代理三态下拉（跟随系统 git 配置/强制直连（无代理）/通过代理服务器连接）+
            "绕过系统 git 配置"独立 checkbox（与代理三态正交，不再是直连的隐含条件）。
-           载荷：system 省键 / none httpProxy:'' / custom httpProxy:<输入值>（输入框仅 custom 态显现） -->
+           载荷（POST：system 省键 / PATCH：system 发 httpProxy:null 显式 unset）/
+           none httpProxy:'' / custom httpProxy:<输入值>（输入框仅 custom 态显现） -->
       <div class="transport-group">
         <span class="transport-title">网络连接方式</span>
         <label class="inline-check">

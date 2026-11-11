@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -457,6 +457,65 @@ describe('PATCH /api/repos/:id（运行时调整轮询间隔与分支属性，�
     }
     expect(handle.config.repos[0].bypassGitConfig).toBe(false)
     expect(handle.config.repos[0].httpProxy).toBe('')
+  })
+
+  it('PATCH httpProxy:null → 显式 unset（响应/内存/磁盘省键，回到跟随系统）；键缺省不复活旧值', async () => {
+    // 前置：先设显式代理，模拟"已设代理的仓"（修复前三态编辑死角：无法经 PATCH 还原跟随系统）
+    const set = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/p1', payload: { httpProxy: 'http://127.0.0.1:9' }
+    })
+    expect(set.statusCode).toBe(200)
+    expect(handle.config.repos[0].httpProxy).toBe('http://127.0.0.1:9')
+
+    // JSON Merge Patch 风格：null = 显式移除字段（undefined=跟随系统 git 配置）
+    const unset = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/p1', payload: { httpProxy: null }
+    })
+    expect(unset.statusCode).toBe(200)
+    expect('httpProxy' in (unset.json() as Record<string, unknown>)).toBe(false)   // 响应行省键（与 GET 行同形）
+    expect('httpProxy' in handle.config.repos[0]).toBe(false)                      // 内存字段已删除
+    expect('httpProxy' in onDiskRepo()).toBe(false)                                // config.json 省键（undefined 不落 JSON）
+
+    // 真 unset 锁：后续 PATCH 键缺省（httpProxy 不出现）→ 不改动，绝不复活旧值
+    const again = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/p1', payload: { pollIntervalSeconds: 6 }
+    })
+    expect(again.statusCode).toBe(200)
+    expect('httpProxy' in handle.config.repos[0]).toBe(false)
+    expect('httpProxy' in onDiskRepo()).toBe(false)
+  })
+
+  it('PATCH 回滚锁：httpProxy 变更遇 config 写失败 → 500 且内存精确还原（未设/设值两态，null 哨兵回滚）', async () => {
+    // 让 writeConfig 必败：config.json 原位替换为目录（renameSync 落目录 → EISDIR 抛错）。
+    // 本用例是该 describe 的收尾，configPath 拆坏不影响后续用例；用例内自清理
+    rmSync(configPath)
+    mkdirSync(configPath)
+    try {
+      expect((await handle.app.inject({
+        method: 'PATCH', url: '/api/repos/p1', payload: { httpProxy: null }
+      })).statusCode).toBe(500)
+
+      // 场景 A：内存原值未设 → PATCH 设值 → 写失败回滚必须还原"未设"（哨兵 null → delete；
+      // 回滚存 undefined 会让新值残留在内存，与磁盘不一致）
+      const set = await handle.app.inject({
+        method: 'PATCH', url: '/api/repos/p1', payload: { httpProxy: 'http://rollback:1' }
+      })
+      expect(set.statusCode).toBe(500)
+      expect((set.json() as { code: string }).code).toBe('config_write_failed')
+      expect('httpProxy' in handle.config.repos[0]).toBe(false)
+      expect(handle.config.repos[0].pollIntervalSeconds).toBe(6)   // 同载荷其余键一并还原
+
+      // 场景 B：内存原值在场（直接构造，绕过必败的写路径）→ PATCH null unset → 写失败
+      // 回滚必须还原原值（snapshot 捕获 string 原样赋回）
+      handle.config.repos[0].httpProxy = 'http://rollback:1'
+      const unset = await handle.app.inject({
+        method: 'PATCH', url: '/api/repos/p1', payload: { httpProxy: null }
+      })
+      expect(unset.statusCode).toBe(500)
+      expect(handle.config.repos[0].httpProxy).toBe('http://rollback:1')
+    } finally {
+      rmSync(configPath, { recursive: true })   // 还原为不存在，外层 cleanupTracked 兜底
+    }
   })
 })
 

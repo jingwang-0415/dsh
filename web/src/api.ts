@@ -155,14 +155,15 @@ export interface SyncResultDto {
 
 // v1.3.1 行内编辑：PATCH /api/repos/:id 请求体 = 五键白名单（契约见 server/test/reposapi.test.ts）。
 // url/id 是仓的身份键，服务端一票拒绝（url_immutable），前端载荷也绝不携带。
-// v1.3.2 传输兜底两键入白名单：bypassGitConfig 恒带 boolean；httpProxy 省键=不改动
-// （服务端仅更新提供的键——"未设=跟随系统"语义在 PATCH 侧即保持现状）
+// v1.3.2 传输兜底两键入白名单；httpProxy JSON Merge Patch 风格四值语义：
+// null = 显式 unset（服务端删字段，回到跟随系统 git 配置）；'' = 强制无代理；
+// 非空 = 显式代理；键缺省 = 不改动（存量语义保留）
 export interface RepoPatchDto {
   pollIntervalSeconds?: number
   defaultBranch?: string
   branchExclude?: string[]
   bypassGitConfig?: boolean
-  httpProxy?: string
+  httpProxy?: string | null
 }
 
 export function formatRelative(ts: number, now = Date.now()): string {

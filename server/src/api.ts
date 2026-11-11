@@ -149,7 +149,7 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
     // 透传 invalid
     const patch: {
       pollIntervalSeconds?: number; defaultBranch?: string; branchExclude?: string[]
-      bypassGitConfig?: boolean; httpProxy?: string
+      bypassGitConfig?: boolean; httpProxy?: string | null
     } = {}
     const issues: string[] = []
     if (body.pollIntervalSeconds !== undefined) {
@@ -186,12 +186,16 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
       }
     }
     if (body.httpProxy !== undefined) {
-      // 空串合法 = 强制无代理（显式覆盖劫持的全局代理），与 repoSchema z.string() 同阈值；
-      // 键缺省走不到这里（undefined 不落对象，"未设=跟随系统"语义得以保留）
-      if (typeof body.httpProxy === 'string') {
+      // JSON Merge Patch 风格：null = 显式 unset（删字段，回到"跟随系统 git 配置"——
+      // 前端三态下拉 system 态在 PATCH 时发 null，已设代理的仓可经 UI 还原跟随系统）；
+      // 空串 = 强制无代理（显式覆盖劫持的全局代理），非空 = 显式代理，与 repoSchema
+      // z.string() 同阈值；键缺省走不到这里（undefined 不落对象 = 不改动，存量语义保留）
+      if (body.httpProxy === null) {
+        patch.httpProxy = null
+      } else if (typeof body.httpProxy === 'string') {
         patch.httpProxy = body.httpProxy
       } else {
-        issues.push('httpProxy: 需为字符串')
+        issues.push('httpProxy: 需为字符串或 null')
       }
     }
     if (issues.length > 0) {
@@ -210,7 +214,10 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
       defaultBranch: repo.defaultBranch,
       branchExclude: repo.branchExclude,
       bypassGitConfig: repo.bypassGitConfig,
-      httpProxy: repo.httpProxy
+      // null 哨兵表示"原值未设"：updateRepoFields(null) → delete 字段，writeConfig 失败
+      // 回滚时能精确还原 unset 前状态（直接存 undefined 会让回滚无法区分"不动"与"还原为未设"，
+      // 先设值后回滚会把新值残留在内存——内存与磁盘不一致）
+      httpProxy: repo.httpProxy ?? null
     }
     updateRepoFields(repo, patch)
     try {
