@@ -1,6 +1,8 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer } from 'node:net'
+import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { GitCommandError, pipeRunGit, runGit } from '../src/gitRunner.js'
 import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
@@ -23,6 +25,26 @@ describe('runGit', () => {
 
   it('超时 kill 并报超时错误', async () => {
     await expect(runGit('.', ['5'], { timeoutMs: 100, bin: 'sleep' })).rejects.toThrow(/超时/)
+  })
+
+  it('超时路径错误消息同样凭证脱敏（plain Error 亦套 sanitize）', async () => {
+    // fix round 1：超时 plain Error 的 message 同拼 args.join、同样进 fetch_events.last_error，
+    // 与 GitCommandError 是同漏洞类。真实 git + 本地黑洞 listener（accept 后不响应）确定性挂起，
+    // 短 timeoutMs 触发超时路径——connection refused 会立即失败走 GitCommandError，复现不了超时
+    const server = createServer(() => { /* 黑洞：不写不关 */ })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+    try {
+      const err = await runGit('.', ['ls-remote', `https://user:secretToken@127.0.0.1:${port}/x.git`], { timeoutMs: 300 })
+        .catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err).not.toBeInstanceOf(GitCommandError)
+      expect((err as Error).message).toContain('超时')
+      expect((err as Error).message).toContain('***@')
+      expect((err as Error).message).not.toContain('secretToken')
+    } finally {
+      server.close()
+    }
   })
 
   it('超时后孙进程持管道也必须 settle（销毁我方流强制 close）', async () => {

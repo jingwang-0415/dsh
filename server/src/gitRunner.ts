@@ -56,7 +56,7 @@ export async function runGit(cwd: string, args: string[], opts: RunGitOptions = 
       clearTimeout(timer)
       const stdout = Buffer.concat(stdoutChunks).toString('utf8')
       const stderr = Buffer.concat(stderrChunks).toString('utf8')
-      if (timedOut) reject(new Error(`${bin} ${args.join(' ')} 超时 (${timeoutMs}ms)`))
+      if (timedOut) reject(new Error(`${bin} ${sanitize(args.join(' '))} 超时 (${timeoutMs}ms)`))
       else if (code === 0) resolve({ stdout, stderr })
       else reject(new GitCommandError(args, code, stderr))
     })
@@ -143,7 +143,8 @@ export async function pipeRunGit(
     a.on('close', code => {
       if (settled) return
       aCode = code
-      if (timedOut) settle(new Error(`${bin} ${argsA.join(' ')} | ${bin} ${argsB.join(' ')} 超时 (${timeoutMs}ms)`))
+      // fix round 1：超时 plain Error 与 GitCommandError 同漏洞类（args 凭据 → fetch_events.last_error）
+      if (timedOut) settle(new Error(`${bin} ${sanitize(argsA.join(' '))} | ${bin} ${sanitize(argsB.join(' '))} 超时 (${timeoutMs}ms)`))
       else if (code !== 0) settle(new GitCommandError(argsA, code, Buffer.concat(stderrA).toString('utf8')))
       else {
         b.stdin!.end() // A 正常结束 → EOF 给 B（正常流关闭；end: false 由本处收尾）
@@ -154,7 +155,7 @@ export async function pipeRunGit(
     b.on('close', code => {
       if (settled) return
       bCode = code
-      if (timedOut) settle(new Error(`${bin} ${argsA.join(' ')} | ${bin} ${argsB.join(' ')} 超时 (${timeoutMs}ms)`))
+      if (timedOut) settle(new Error(`${bin} ${sanitize(argsA.join(' '))} | ${bin} ${sanitize(argsB.join(' '))} 超时 (${timeoutMs}ms)`))
       else if (code !== 0) settle(new GitCommandError(argsB, code, Buffer.concat(stderrB).toString('utf8')))
       else tryFinish()
     })
