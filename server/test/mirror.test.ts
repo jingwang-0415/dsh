@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
+import { cleanupTracked, createOriginRepo, trackTmp, withProxyEnvCleared } from './fixture.js'
 
 afterEach(cleanupTracked)
 import { ensureMirror, fetchMirror, snapshotRefs, transportArgs } from '../src/mirror.js'
@@ -74,22 +74,7 @@ describe('transportArgs（纯函数，fix round 1 三分支语义）', () => {
 })
 
 describe('mirror 传输兜底（真实 git 行为）', () => {
-  const PROXY_ENV_KEYS = [
-    'http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
-    'no_proxy', 'NO_PROXY'
-  ]
-
-  /** 清空代理环境变量执行 fn（runGit 继承本进程 env；完成后原样恢复） */
-  async function withProxyEnvCleared(fn: () => Promise<void>): Promise<void> {
-    const saved = new Map<string, string | undefined>()
-    for (const k of PROXY_ENV_KEYS) { saved.set(k, process.env[k]); delete process.env[k] }
-    try { await fn() } finally {
-      for (const [k, v] of saved) {
-        if (v === undefined) delete process.env[k]
-        else process.env[k] = v
-      }
-    }
-  }
+  /** withProxyEnvCleared 已抽到共享 util（./fixture.ts），劫持用例沿用（见 fixture.ts 顶部注释） */
 
   /**
    * 本地静态服务器伺服裸仓（dumb HTTP 协议）：离线复现"内源代理劫持 git 全局配置"场景。

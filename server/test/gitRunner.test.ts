@@ -5,7 +5,7 @@ import { createServer } from 'node:net'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { GitCommandError, pipeRunGit, runGit } from '../src/gitRunner.js'
-import { cleanupTracked, createOriginRepo, trackTmp } from './fixture.js'
+import { cleanupTracked, createOriginRepo, trackTmp, withProxyEnvCleared } from './fixture.js'
 import { ensureMirror } from '../src/mirror.js'
 
 afterEach(cleanupTracked)
@@ -30,18 +30,23 @@ describe('runGit', () => {
   it('超时路径错误消息同样凭证脱敏（plain Error 亦套 sanitize）', async () => {
     // fix round 1：超时 plain Error 的 message 同拼 args.join、同样进 fetch_events.last_error，
     // 与 GitCommandError 是同漏洞类。真实 git + 本地黑洞 listener（accept 后不响应）确定性挂起，
-    // 短 timeoutMs 触发超时路径——connection refused 会立即失败走 GitCommandError，复现不了超时
+    // 短 timeoutMs 触发超时路径——connection refused 会立即失败走 GitCommandError，复现不了超时。
+    // 最终批次：导出代理 env 且 no_proxy 未豁免 127.0.0.1 的环境里 git 走代理转发（探针实证
+    // 连的是代理端口而非目标端口），严格/拒环回代理会快速失败为 GitCommandError，同样复现不了
+    // 超时——套用 withProxyEnvCleared（与 mirror.test 劫持用例同款）清空代理 env 保证确定性
     const server = createServer(() => { /* 黑洞：不写不关 */ })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const { port } = server.address() as AddressInfo
     try {
-      const err = await runGit('.', ['ls-remote', `https://user:secretToken@127.0.0.1:${port}/x.git`], { timeoutMs: 300 })
-        .catch((e: unknown) => e)
-      expect(err).toBeInstanceOf(Error)
-      expect(err).not.toBeInstanceOf(GitCommandError)
-      expect((err as Error).message).toContain('超时')
-      expect((err as Error).message).toContain('***@')
-      expect((err as Error).message).not.toContain('secretToken')
+      await withProxyEnvCleared(async () => {
+        const err = await runGit('.', ['ls-remote', `https://user:secretToken@127.0.0.1:${port}/x.git`], { timeoutMs: 300 })
+          .catch((e: unknown) => e)
+        expect(err).toBeInstanceOf(Error)
+        expect(err).not.toBeInstanceOf(GitCommandError)
+        expect((err as Error).message).toContain('超时')
+        expect((err as Error).message).toContain('***@')
+        expect((err as Error).message).not.toContain('secretToken')
+      })
     } finally {
       server.close()
     }

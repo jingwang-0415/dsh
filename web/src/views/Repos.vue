@@ -24,8 +24,8 @@ const formProxy = ref('')
 // - custom → httpProxy:<输入值>；none → httpProxy:''
 // - system 态按目标分：PATCH → httpProxy:null（JSON Merge Patch 显式 unset，服务端删字段，
 //   已设代理的仓可经 UI 还原为跟随系统；省键会被服务端理解为"不改动"，承载不了该语义）；
-//   POST → 省键（新建即跟随系统）。custom 且输入为空被 validate 先行拦截，此处兜底按省键
-//   处理——绝不静默降级成另一态
+//   POST → 省键（新建即跟随系统）。custom 且输入为空被 validate 先行拦截，此处兜底按目标
+//   语义处理：patch → httpProxy:null（显式 unset）、post → 省键——绝不静默降级成另一态
 function transportFields(bypass: boolean, mode: ProxyMode, proxyRaw: string, target: 'post' | 'patch'): { bypassGitConfig: boolean; httpProxy?: string | null } {
   const proxy = proxyRaw.trim()
   const proxyField: { httpProxy?: string | null } =
