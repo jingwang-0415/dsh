@@ -76,6 +76,20 @@ describe('loadConfig', () => {
     expect(cfg.repos[0].bypassGitConfig).toBe(true)
     expect(cfg.repos[0].httpProxy).toBe('http://p:1')
   })
+  it('gitConfigPath 缺省 undefined 省键；显式值解析保留（v1.5 按仓 git 配置档案）', () => {
+    const cfg = loadConfig(writeConfig(valid))
+    expect(cfg.repos[0].gitConfigPath).toBeUndefined()
+    expect('gitConfigPath' in cfg.repos[0]).toBe(false)
+    const explicit = loadConfig(writeConfig({
+      repos: [{ id: 'demo', url: 'ssh://git@example.com/demo.git', gitConfigPath: '/x/cfg' }]
+    }))
+    expect(explicit.repos[0].gitConfigPath).toBe('/x/cfg')
+  })
+  it('bypassGitConfig 与 gitConfigPath 双设 → throws 含"互斥"（schema 级 refine 挡）', () => {
+    expect(() => loadConfig(writeConfig({
+      repos: [{ id: 'demo', url: 'ssh://git@example.com/demo.git', bypassGitConfig: true, gitConfigPath: '/x/cfg' }]
+    }))).toThrow(/互斥/)
+  })
 })
 
 describe('isBranchExcluded', () => {

@@ -75,13 +75,15 @@ describe('仓库生命周期 API（真实 config 文件 fixture）', () => {
 
     const list = await handle.app.inject({ method: 'GET', url: '/api/repos' })
     expect(list.json().map((r: { id: string }) => r.id)).toEqual(['r1', 'r2', 'beta'])
-    // GET /api/repos 契约（fix round 1）：基础六键恒在（含 branchExclude 与 bypassGitConfig
-    // default false）；httpProxy 仅显式设置时出现——undefined → JSON 省键（未设=跟随系统 git 配置）
+    // GET /api/repos 契约（fix round 1，v1.5 扩八字段）：基础六键恒在（含 branchExclude 与
+    // bypassGitConfig default false）；httpProxy/gitConfigPath 仅显式设置时出现——
+    // undefined → JSON 省键（未设=跟随系统 git 配置 / 使用机器级全局配置）
     for (const row of list.json()) {
-      expect(Object.keys(row).filter(k => k !== 'httpProxy')).toEqual([
+      expect(Object.keys(row).filter(k => k !== 'httpProxy' && k !== 'gitConfigPath')).toEqual([
         'id', 'url', 'defaultBranch', 'branchExclude', 'pollIntervalSeconds', 'bypassGitConfig'
       ])
       expect('httpProxy' in row).toBe(row.httpProxy !== undefined)
+      expect('gitConfigPath' in row).toBe(row.gitConfigPath !== undefined)
     }
     expect(handle.schedulers.length).toBe(before + 1)
 
@@ -242,6 +244,183 @@ describe('仓库生命周期 API（真实 config 文件 fixture）', () => {
     await awaitSettled('epsilon')
     expect((await handle.app.inject({ method: 'DELETE', url: '/api/repos/delta' })).statusCode).toBe(200)
     expect((await handle.app.inject({ method: 'DELETE', url: '/api/repos/epsilon' })).statusCode).toBe(200)
+  })
+
+  // —— v1.5 Task 1：按仓指定 git 配置文件（POST/PATCH/GET 全链路）——
+
+  it('POST 带 gitConfigPath（真实临时文件）→ 201/GET/磁盘回显；POST 双设/不存在路径 → 400', async () => {
+    const cfgFile = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-gitcfg-'))), 'gitconfig')
+    writeFileSync(cfgFile, '[user]\n\tname = gsm-test\n')
+
+    const res = await handle.app.inject({
+      method: 'POST', url: '/api/repos', payload: { id: 'zeta', url: o3.dir, gitConfigPath: cfgFile }
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json()).toMatchObject({ id: 'zeta', gitConfigPath: cfgFile })
+
+    // GET 行映射：显式值回显；未设仓省键（undefined → JSON 省键，既有模式）
+    const list = await handle.app.inject({ method: 'GET', url: '/api/repos' })
+    expect(list.json().find((r: { id: string }) => r.id === 'zeta')).toMatchObject({ gitConfigPath: cfgFile })
+    expect('gitConfigPath' in list.json().find((r: { id: string }) => r.id === 'r2')).toBe(false)
+
+    // 磁盘 config.json 回写含显式值
+    const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as { repos: { id: string; gitConfigPath?: string }[] }
+    expect(cfg.repos.find(r => r.id === 'zeta')).toMatchObject({ gitConfigPath: cfgFile })
+
+    // POST 双设 → schema refine 自动挡（400 invalid 透传，消息含"互斥"）
+    const dual = await handle.app.inject({
+      method: 'POST', url: '/api/repos',
+      payload: { id: 'dual', url: o3.dir, bypassGitConfig: true, gitConfigPath: cfgFile }
+    })
+    expect(dual.statusCode).toBe(400)
+    expect(dual.json()).toMatchObject({ code: 'invalid' })
+    expect((dual.json() as { message: string }).message).toContain('互斥')
+
+    // 创建时点校验：不存在路径 → 400 git_config_not_found，内存/调度器/磁盘不落
+    const before = handle.schedulers.length
+    const bad = await handle.app.inject({
+      method: 'POST', url: '/api/repos',
+      payload: { id: 'badcfg', url: o3.dir, gitConfigPath: '/nonexistent/gsm/gitconfig' }
+    })
+    expect(bad.statusCode).toBe(400)
+    expect(bad.json()).toEqual({
+      code: 'git_config_not_found',
+      message: '指定的 git 配置文件不存在: /nonexistent/gsm/gitconfig'
+    })
+    expect(handle.schedulers.length).toBe(before)
+    expect(onDiskRepoIds()).not.toContain('badcfg')
+
+    await awaitSettled('zeta')
+    expect((await handle.app.inject({ method: 'DELETE', url: '/api/repos/zeta' })).statusCode).toBe(200)
+  })
+
+  it('POST gitConfigPath 空串 → 400 invalid（repoSchema min(1) 空串收口，不落 existsSync(\'\') 的空路径文案）', async () => {
+    const res = await handle.app.inject({
+      method: 'POST', url: '/api/repos', payload: { id: 'emptycfg', url: o3.dir, gitConfigPath: '' }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'invalid' })
+    expect((res.json() as { message: string }).message).toContain('gitConfigPath')
+    expect(onDiskRepoIds()).not.toContain('emptycfg')
+    expect(handle.schedulers.some(s => s.repoId === 'emptycfg')).toBe(false)
+  })
+
+  it('PATCH 更新 gitConfigPath → 200 回显/磁盘（原位变更锁）；PATCH 不存在路径 → 400 且原值保留', async () => {
+    const cfgFile = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-gitcfg-patch-'))), 'gitconfig')
+    writeFileSync(cfgFile, '[user]\n\tname = gsm-test\n')
+    const post = await handle.app.inject({
+      method: 'POST', url: '/api/repos', payload: { id: 'eta', url: o3.dir }
+    })
+    expect(post.statusCode).toBe(201)
+    const repoRef = handle.config.repos.find(r => r.id === 'eta')
+
+    const patch = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/eta', payload: { gitConfigPath: cfgFile }
+    })
+    expect(patch.statusCode).toBe(200)
+    expect(patch.json()).toMatchObject({ id: 'eta', gitConfigPath: cfgFile })
+    expect(handle.config.repos.find(r => r.id === 'eta')).toBe(repoRef)   // 原位变更锁
+    const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as { repos: { id: string; gitConfigPath?: string }[] }
+    expect(cfg.repos.find(r => r.id === 'eta')).toMatchObject({ gitConfigPath: cfgFile })
+
+    // 更新路径回显：已设档案换另一真实档案 → 200 新路径回显（响应/内存/磁盘），原位锁保持
+    const cfgFile2 = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-gitcfg-patch2-'))), 'gitconfig2')
+    writeFileSync(cfgFile2, '[user]\n\tname = gsm-test-2\n')
+    const patch2 = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/eta', payload: { gitConfigPath: cfgFile2 }
+    })
+    expect(patch2.statusCode).toBe(200)
+    expect(patch2.json()).toMatchObject({ id: 'eta', gitConfigPath: cfgFile2 })
+    expect(handle.config.repos.find(r => r.id === 'eta')).toBe(repoRef)
+    expect(handle.config.repos.find(r => r.id === 'eta')!.gitConfigPath).toBe(cfgFile2)
+    const cfg2 = JSON.parse(readFileSync(configPath, 'utf8')) as { repos: { id: string; gitConfigPath?: string }[] }
+    expect(cfg2.repos.find(r => r.id === 'eta')).toMatchObject({ gitConfigPath: cfgFile2 })
+
+    // PATCH 不存在路径 → 400 git_config_not_found（创建/PATCH 时点校验），原值保留
+    const bad = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/eta', payload: { gitConfigPath: '/nonexistent/gsm/patch' }
+    })
+    expect(bad.statusCode).toBe(400)
+    expect(bad.json()).toMatchObject({ code: 'git_config_not_found' })
+    expect(handle.config.repos.find(r => r.id === 'eta')!.gitConfigPath).toBe(cfgFile2)
+
+    await awaitSettled('eta')
+    expect((await handle.app.inject({ method: 'DELETE', url: '/api/repos/eta' })).statusCode).toBe(200)
+  })
+
+  it('PATCH 互斥：body 双设 / 存量 bypass+PATCH path / 存量 path+PATCH bypass → 400 mutually_exclusive', async () => {
+    const cfgFile = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-gitcfg-mx-'))), 'gitconfig')
+    writeFileSync(cfgFile, '[user]\n\tname = gsm-test\n')
+    const post = await handle.app.inject({
+      method: 'POST', url: '/api/repos', payload: { id: 'theta', url: o3.dir }
+    })
+    expect(post.statusCode).toBe(201)
+    const repo = () => handle.config.repos.find(r => r.id === 'theta')!
+
+    // 场景 A：body 同含 bypassGitConfig=true 与 gitConfigPath → 400 mutually_exclusive，两值均不落
+    const both = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/theta', payload: { bypassGitConfig: true, gitConfigPath: cfgFile }
+    })
+    expect(both.statusCode).toBe(400)
+    expect(both.json()).toMatchObject({ code: 'mutually_exclusive' })
+    expect(repo().bypassGitConfig).toBe(false)
+    expect('gitConfigPath' in repo()).toBe(false)
+
+    // 场景 B：存量 bypass=true，PATCH 仅 path → 生效态冲突同拒（放行落盘会让重启 loadConfig 崩溃）
+    expect((await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/theta', payload: { bypassGitConfig: true }
+    })).statusCode).toBe(200)
+    const diagB = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/theta', payload: { gitConfigPath: cfgFile }
+    })
+    expect(diagB.statusCode).toBe(400)
+    expect(diagB.json()).toMatchObject({ code: 'mutually_exclusive' })
+    expect('gitConfigPath' in repo()).toBe(false)
+
+    // 场景 C：存量 gitConfigPath，PATCH bypass=true → 同拒
+    expect((await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/theta', payload: { bypassGitConfig: false }
+    })).statusCode).toBe(200)
+    expect((await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/theta', payload: { gitConfigPath: cfgFile }
+    })).statusCode).toBe(200)
+    const diagC = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/theta', payload: { bypassGitConfig: true }
+    })
+    expect(diagC.statusCode).toBe(400)
+    expect(diagC.json()).toMatchObject({ code: 'mutually_exclusive' })
+    expect(repo().bypassGitConfig).toBe(false)
+
+    await awaitSettled('theta')
+    expect((await handle.app.inject({ method: 'DELETE', url: '/api/repos/theta' })).statusCode).toBe(200)
+  })
+
+  it('PATCH gitConfigPath:null → 显式 unset（响应/内存/磁盘省键）；键缺省不复活旧值', async () => {
+    const cfgFile = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-gitcfg-null-'))), 'gitconfig')
+    writeFileSync(cfgFile, '[user]\n\tname = gsm-test\n')
+    const post = await handle.app.inject({
+      method: 'POST', url: '/api/repos', payload: { id: 'iota', url: o3.dir, gitConfigPath: cfgFile }
+    })
+    expect(post.statusCode).toBe(201)
+    await awaitSettled('iota')
+
+    // JSON Merge Patch 风格（httpProxy:null 先例）：null = 显式移除字段
+    const unset = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/iota', payload: { gitConfigPath: null }
+    })
+    expect(unset.statusCode).toBe(200)
+    expect('gitConfigPath' in (unset.json() as Record<string, unknown>)).toBe(false)
+    expect('gitConfigPath' in handle.config.repos.find(r => r.id === 'iota')!).toBe(false)
+    const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as { repos: { id: string; gitConfigPath?: string }[] }
+    expect('gitConfigPath' in cfg.repos.find(r => r.id === 'iota')!).toBe(false)
+
+    // 键缺省 → 不改动，绝不复活旧值
+    expect((await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/iota', payload: { pollIntervalSeconds: 9 }
+    })).statusCode).toBe(200)
+    expect('gitConfigPath' in handle.config.repos.find(r => r.id === 'iota')!).toBe(false)
+
+    expect((await handle.app.inject({ method: 'DELETE', url: '/api/repos/iota' })).statusCode).toBe(200)
   })
 })
 

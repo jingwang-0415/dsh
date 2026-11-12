@@ -14,6 +14,7 @@ const statusPayload = {
 interface RepoRowShape {
   id: string; url: string; defaultBranch: string; branchExclude: string[]; pollIntervalSeconds: number
   bypassGitConfig?: boolean; httpProxy?: string   // T1 裁定：GET 行可能省键（undefined=跟随系统）
+  gitConfigPath?: string                          // v1.5：未设省键（undefined=使用机器级全局配置）
 }
 
 interface FetchOpts {
@@ -30,7 +31,7 @@ function stubFetch(opts: FetchOpts = {}) {
       return { ok: r.ok, json: async () => r.json }
     }
     if (init?.method === 'PATCH') {
-      // 默认回 PATCH 更新后的仓行（与 server 契约同形：五字段）
+      // 默认回 PATCH 更新后的仓行（与 server 契约同形：基础字段，可选传输键可省）
       const r = opts.patchResult ?? { ok: true, json: reposPayload[0] }
       return { ok: r.ok, json: async () => r.json }
     }
@@ -167,10 +168,11 @@ describe('Repos 视图（仓库管理）', () => {
     // 载荷白名单（无 url/id）；排除 glob 逗号拆分为字符串数组；
     // v1.3.2 传输两键恒带 boolean/按三分支——默认行无传输配置 → bypassGitConfig:false、
     // 编辑态下拉预填 system → PATCH 显式 httpProxy:null（JSON Merge Patch unset，服务端
-    // 对已无该字段的仓 delete 为无操作，幂等；省键承载不了"还原跟随系统"语义故不再省）
+    // 对已无该字段的仓 delete 为无操作，幂等；省键承载不了"还原跟随系统"语义故不再省）；
+    // v1.5 gitConfigPath 同构：默认行为空 → PATCH 显式 null（省键=服务端不改动，清不掉存量路径）
     expect(JSON.parse(String((calls[i][1] as RequestInit).body))).toEqual({
       pollIntervalSeconds: 7, defaultBranch: 'develop', branchExclude: ['tmp/**', 'dist/**'],
-      bypassGitConfig: false, httpProxy: null
+      bypassGitConfig: false, httpProxy: null, gitConfigPath: null
     })
     // 保存成功 → 退出编辑态 + 刷新列表（PATCH 之后再次 GET /api/repos）
     expect(wrapper.find('.edit-branch').exists()).toBe(false)
@@ -260,7 +262,7 @@ describe('Repos 视图（仓库管理）', () => {
       // 预填值合法 → PATCH 载荷即当前行值；成功后退出编辑态
       expect(JSON.parse(String((patch![1] as RequestInit).body))).toEqual({
         pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [],
-        bypassGitConfig: false, httpProxy: null
+        bypassGitConfig: false, httpProxy: null, gitConfigPath: null
       })
       expect(wrapper.find('.edit-branch').exists()).toBe(false)
     }
@@ -331,13 +333,14 @@ describe('Repos 视图（仓库管理）', () => {
     })
   })
 
-  it('表格传输列四态：bypass→直连、httpProxy 非空→代理、""→无代理、省键→—（不再合流）', async () => {
+  it('表格传输列四态：bypass→直连、httpProxy 非空→代理、""→无代理、省键→—（不再合流）；gitConfigPath→档案角标', async () => {
     const { wrapper } = await mountView({
       reposList: [
         { id: 'r1', url: 'u1', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30 },
         { id: 'r2', url: 'u2', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, bypassGitConfig: true },
         { id: 'r3', url: 'u3', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, httpProxy: 'http://p:1' },
-        { id: 'r4', url: 'u4', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, bypassGitConfig: false, httpProxy: '' }
+        { id: 'r4', url: 'u4', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, bypassGitConfig: false, httpProxy: '' },
+        { id: 'r5', url: 'u5', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, gitConfigPath: '/cfg' }
       ]
     })
     const cells = wrapper.findAll('tbody tr').map(row => row.find('.transport-cell').text())
@@ -345,6 +348,7 @@ describe('Repos 视图（仓库管理）', () => {
     expect(cells[1]).toContain('直连')     // bypass → 直连
     expect(cells[2]).toContain('代理')     // 非空 → 代理
     expect(cells[3]).toContain('无代理')   // httpProxy ''=显式强制无代理（v1.4 四态，不再与 — 合流）
+    expect(cells[4]).toContain('档案')     // v1.5：指定配置档案 → 角标（title 携带路径）
   })
 
   it('行内编辑网络连接方式：预填映射三态；保存 PATCH 三态载荷（自定义值/强制直连 ""/跟随系统 null 显式 unset）', async () => {
@@ -367,7 +371,7 @@ describe('Repos 视图（仓库管理）', () => {
     const i = fetchMock.mock.calls.findIndex(c => methodOf(c) === 'PATCH')
     expect(JSON.parse(String((fetchMock.mock.calls[i][1] as RequestInit).body))).toEqual({
       pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [],
-      bypassGitConfig: false, httpProxy: 'http://new:2'
+      bypassGitConfig: false, httpProxy: 'http://new:2', gitConfigPath: null
     })
 
     // 第二轮：切"强制直连（无代理）"（stub 静态回 http://old:1 → 预填仍 custom）→ PATCH httpProxy:''（bypass 独立保持 false）
@@ -379,7 +383,7 @@ describe('Repos 视图（仓库管理）', () => {
     expect(patchCalls).toHaveLength(2)
     expect(JSON.parse(String((patchCalls[1][1] as RequestInit).body))).toEqual({
       pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [],
-      bypassGitConfig: false, httpProxy: ''
+      bypassGitConfig: false, httpProxy: '', gitConfigPath: null
     })
 
     // 第三轮：切回"跟随系统 git 配置" → PATCH 显式 httpProxy:null（JSON Merge Patch unset——
@@ -393,7 +397,7 @@ describe('Repos 视图（仓库管理）', () => {
     const body3 = JSON.parse(String((patchCalls3[2][1] as RequestInit).body))
     expect(body3).toEqual({
       pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [],
-      bypassGitConfig: false, httpProxy: null
+      bypassGitConfig: false, httpProxy: null, gitConfigPath: null
     })
     expect('httpProxy' in body3).toBe(true)   // 键显式在场且为 null——省键会被服务端理解为"不改动"
   })
@@ -413,5 +417,90 @@ describe('Repos 视图（仓库管理）', () => {
 
     expect(wrapper.find('.banner-red').text()).toContain('代理地址不能为空')
     expect(fetchMock.mock.calls.some(c => methodOf(c) === 'PATCH')).toBe(false)
+  })
+
+  it('v1.5 添加表单：填自定义 git 配置文件 → POST 载荷带 gitConfigPath（trim 后）；填了路径则禁用直连 checkbox', async () => {
+    const { wrapper, fetchMock } = await mountView()
+    await wrapper.find('input[placeholder="repo-id"]').setValue('beta')
+    await wrapper.find('input[placeholder="https://example.com/beta.git"]').setValue('https://example.com/beta.git')
+    const cfgInput = wrapper.find('.add-gitcfg')
+    expect(cfgInput.exists()).toBe(true)   // RED：入口缺失（需求①主用户路径）
+    await cfgInput.setValue('  /path/to/git-config  ')
+    // 反向互斥：填了路径 → 直连 checkbox 禁用（服务端生效态 400 mutually_exclusive，前端先拦）
+    expect((wrapper.find('.add-bypass').element as HTMLInputElement).disabled).toBe(true)
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    const call = fetchMock.mock.calls.find(c => methodOf(c) === 'POST')
+    expect(call).toBeDefined()
+    // POST 空输入省键（undefined，T1 语义），此处填了路径 → 键在场且 trim；httpProxy 跟随系统省键
+    expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({
+      id: 'beta', url: 'https://example.com/beta.git', bypassGitConfig: false, gitConfigPath: '/path/to/git-config'
+    })
+  })
+
+  it('v1.5 添加表单互斥联动：勾直连 → 清空并禁用 git 配置输入，POST 载荷不带 gitConfigPath 键', async () => {
+    const { wrapper, fetchMock } = await mountView()
+    await wrapper.find('input[placeholder="repo-id"]').setValue('beta')
+    await wrapper.find('input[placeholder="https://example.com/beta.git"]').setValue('https://example.com/beta.git')
+    const bypass = wrapper.find('.add-bypass')
+    expect((bypass.element as HTMLInputElement).disabled).toBe(false)   // 路径为空 → 直连可用
+    await bypass.setValue(true)
+
+    const cfgInput = wrapper.find('.add-gitcfg')
+    expect((cfgInput.element as HTMLInputElement).disabled).toBe(true)   // 勾直连 → 输入禁用
+    expect((cfgInput.element as HTMLInputElement).value).toBe('')        // 且被清空
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    const call = fetchMock.mock.calls.find(c => methodOf(c) === 'POST')
+    // 空输入 POST 省键（undefined 省键语义）：载荷精确无 gitConfigPath
+    expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({
+      id: 'beta', url: 'https://example.com/beta.git', bypassGitConfig: true
+    })
+  })
+
+  it('v1.5 行内编辑 git 配置文件：预填回显/换路径 PATCH 回显；勾直连先清路径 → PATCH 带 bypassGitConfig:true + gitConfigPath:null', async () => {
+    const { wrapper, fetchMock } = await mountView({
+      reposList: [
+        { id: 'r1', url: 'u1', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, gitConfigPath: '/cfg/a' }
+      ]
+    })
+    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+    const cfgInput = wrapper.find('.edit-gitcfg')
+    expect(cfgInput.exists()).toBe(true)   // RED：编辑入口缺失
+    expect((cfgInput.element as HTMLInputElement).value).toBe('/cfg/a')                     // startEdit 预填
+    expect((wrapper.find('.edit-bypass').element as HTMLInputElement).disabled).toBe(true)  // 反向互斥
+
+    // 第一轮：换另一路径 → PATCH 回显新路径（trim）
+    await cfgInput.setValue('/cfg/b')
+    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+    const patchCalls = fetchMock.mock.calls.filter(c => methodOf(c) === 'PATCH')
+    expect(patchCalls).toHaveLength(1)
+    expect(JSON.parse(String((patchCalls[0][1] as RequestInit).body))).toEqual({
+      pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [],
+      bypassGitConfig: false, httpProxy: null, gitConfigPath: '/cfg/b'
+    })
+
+    // 第二轮：清空路径 → 直连解禁 → 勾直连（联动清空+禁用输入）→ 单次保存完成切换。
+    // PATCH 显式 gitConfigPath:null：省键会被服务端按"不改动"解释——存量路径原样保留，
+    // 与 bypassGitConfig:true 撞生效态互斥 400，单次保存切换必须显式 null（JSON Merge Patch unset）
+    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+    await wrapper.find('.edit-gitcfg').setValue('')
+    expect((wrapper.find('.edit-bypass').element as HTMLInputElement).disabled).toBe(false)
+    await wrapper.find('.edit-bypass').setValue(true)
+    expect((wrapper.find('.edit-gitcfg').element as HTMLInputElement).disabled).toBe(true)
+    expect((wrapper.find('.edit-gitcfg').element as HTMLInputElement).value).toBe('')
+    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+    const patchCalls2 = fetchMock.mock.calls.filter(c => methodOf(c) === 'PATCH')
+    expect(patchCalls2).toHaveLength(2)
+    const body2 = JSON.parse(String((patchCalls2[1][1] as RequestInit).body))
+    expect(body2).toEqual({
+      pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [],
+      bypassGitConfig: true, httpProxy: null, gitConfigPath: null
+    })
+    expect('gitConfigPath' in body2).toBe(true)   // 键显式在场且为 null——省键承载不了"清除"
   })
 })

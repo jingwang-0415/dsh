@@ -6,7 +6,9 @@
     "dev": "concurrently -n server,web -c blue,green \"pnpm -C server dev\" \"pnpm -C web dev\"",
     "build": "pnpm -C web build && pnpm -C server build",
     "start": "pnpm -C server start",
-    "test": "pnpm -C server test && pnpm -C web test"
+    "test": "pnpm -C server test && pnpm -C web test",
+    "doctor": "bash scripts/doctor.sh",
+    "setup": "bash scripts/setup.sh"
   },
   "devDependencies": { "concurrently": "^9.1.0" }
 }

@@ -2,7 +2,31 @@
 
 实时监控同一 Git 仓库多个分支之间的差异；对任意提交判定其他分支是否包含，未包含的标红置顶提醒。
 
-## 快速开始
+## 依赖清单
+
+| 依赖 | 版本要求 | 说明 |
+|------|---------|------|
+| Node | ≥ 22 | 本机（DSH 桌面端）PATH 无裸 `node`，pnpm 经 `pnpm exec node` 提供 **Electron 44 内嵌 Node（v24）**，等效满足；`pnpm doctor` 会自动按此方式解析并输出版本 |
+| pnpm | ≥ 9 | 工作区包管理与脚本编排（`pnpm-workspace.yaml` 的 `minimumReleaseAge: 0` 与 `allowBuilds` 勿删） |
+| git | ≥ 2.32 | 镜像监听与分支判定的核心；「按仓指定 git 配置文件」依赖 `GIT_CONFIG_GLOBAL` 环境变量映射（git ≥ 2.31 才支持） |
+| better-sqlite3 | ^13 | **原生模块**，必须与运行时 Node ABI 匹配——Electron 内嵌运行时（ABI 149）在 registry 无预编译包，需按源码编译配方安装，见下方[排障节](#环境要求与排障better-sqlite3-原生模块electron-node-运行时) |
+
+环境不齐或装不上时先跑 `pnpm doctor`：逐项体检并给出可执行的修复提示。
+
+## 一键跑通
+
+```bash
+pnpm setup && pnpm dev
+```
+
+`pnpm setup` 幂等、可重复执行，依次完成：依赖体检（doctor，不过则中止）→ `pnpm install` → `pnpm build` → 生成数据目录与 `config.json` 样例（**仅在缺时生成，绝不覆盖已有配置**）→ 打印启动命令（不代启，保持显式）。样例配置指向演示仓 `/tmp/gsm-demo-origin`，首次体验先执行 `scripts/make-fixture.sh /tmp/gsm-demo-origin`；真实仓库随后在网页「仓库管理」页添加（免重启生效，自动回写 config.json）。
+
+- 生产模式：`pnpm setup && pnpm start`（setup 已完成 build，后端 43900 同时托管前端构建产物）。
+- 自定义数据/配置位置：`GSM_DATA=/path/to/data GSM_CONFIG=/path/to/config.json pnpm setup`（doctor 的目录可写项也按这两个变量探测）。
+- `pnpm install` 若在 better-sqlite3 编译处失败，按下方排障节三步重装后重跑 `pnpm setup` 即可。
+
+## 快速开始（手动分步，等价于 `pnpm setup` 的内部步骤）
+
 
 ```bash
 pnpm install
@@ -63,6 +87,10 @@ pnpm build && pnpm start
 ## 已知语义（重要）
 
 包含判定基于提交 SHA 祖先关系：cherry-pick 产生的不同 SHA 会被判为"未包含"，这是 git 固有语义，工具如实标注不做猜测。
+
+## 文档
+
+- AI 协作与改造入口：[docs/ai/AGENTS.md](docs/ai/AGENTS.md)（渐进式披露五层：入口速查 → 概览 → 架构 → 服务端/前端模块 → 约束红线与已知坑）。
 
 ## 测试
 

@@ -29,8 +29,20 @@ export const repoSchema = z.object({
   //   未设与显式空串必须区分：default('') 会让存量仓被静默强制无代理
   //   （-c http.proxy= 同时压制全局配置代理与 env 代理，依赖内网代理的仓升级即断连）
   bypassGitConfig: z.boolean().default(false),
-  httpProxy: z.string().optional()
+  httpProxy: z.string().optional(),
+  // 按仓指定 git 配置档案（v1.5）：缺省 undefined = 使用机器级全局配置（存量行为不变）；
+  // 与 bypassGitConfig 互斥（下方 schema 级 refine 挡）——bypass 清空全部配置档案，
+  // 再指定档案属语义矛盾；文件存在性由 api 层 existsSync 校验（config 层不做 IO）；
+  // min(1) 空串收口：'' 在此 400 invalid，不落 api 层 existsSync('') 的"空路径不存在"文案
+  gitConfigPath: z.string().min(1).optional()
 })
+// schema 级 refine：双设即拒（loadConfig 启动挡 + POST safeParse 400 invalid 透传）。
+// refine 在 default 填充后运行，data.bypassGitConfig 恒为 boolean；
+// 消息含"互斥"（测试与 400 message 断言锚点）
+  .refine(
+    data => !(data.bypassGitConfig && data.gitConfigPath),
+    { message: 'bypassGitConfig 与 gitConfigPath 互斥' }
+  )
 
 const configSchema = z.object({
   // repo id 同时是 mirror 目录名/调度器标识/API ?repo= 取值，重复会让三方引用全部歧义
@@ -92,13 +104,16 @@ export function isBranchExcluded(branch: string, patterns: string[]): boolean {
  * 值校验由调用方完成（api.ts PATCH 端点），这里只做字段级赋值。
  * httpProxy null 分支（JSON Merge Patch 风格显式 unset）：delete 摘除字段回到
  * "跟随系统 git 配置"，config.json 回写时 undefined 键自然省略（JSON.stringify 行为）；
- * RepoConfig.httpProxy 为 optional，delete 合法且不破坏原对象引用。
+ * gitConfigPath null 分支同构（v1.5：回到"使用机器级全局配置"）；
+ * RepoConfig.httpProxy/gitConfigPath 为 optional，delete 合法且不破坏原对象引用。
+ * 互斥（bypassGitConfig && gitConfigPath 不同真）由调用方（api.ts PATCH）前置校验，
+ * 本函数只做字段级赋值不拦组合——直调方须自行保证生效态合法。
  */
 export function updateRepoFields(
   repo: RepoConfig,
   patch: {
     pollIntervalSeconds?: number; defaultBranch?: string; branchExclude?: string[]
-    bypassGitConfig?: boolean; httpProxy?: string | null
+    bypassGitConfig?: boolean; httpProxy?: string | null; gitConfigPath?: string | null
   }
 ): void {
   Object.assign(repo, {
@@ -106,8 +121,10 @@ export function updateRepoFields(
     ...(patch.defaultBranch !== undefined && { defaultBranch: patch.defaultBranch }),
     ...(patch.branchExclude !== undefined && { branchExclude: patch.branchExclude }),
     ...(patch.bypassGitConfig !== undefined && { bypassGitConfig: patch.bypassGitConfig }),
-    ...(typeof patch.httpProxy === 'string' && { httpProxy: patch.httpProxy })
+    ...(typeof patch.httpProxy === 'string' && { httpProxy: patch.httpProxy }),
+    ...(typeof patch.gitConfigPath === 'string' && { gitConfigPath: patch.gitConfigPath })
   })
   // 显式 null = unset（null 不是 undefined，二者语义必须区分：缺省不动 / null 删字段）
   if (patch.httpProxy === null) delete repo.httpProxy
+  if (patch.gitConfigPath === null) delete repo.gitConfigPath
 }
