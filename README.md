@@ -64,6 +64,10 @@ pnpm build && pnpm start
 
 包含判定基于提交 SHA 祖先关系：cherry-pick 产生的不同 SHA 会被判为"未包含"，这是 git 固有语义，工具如实标注不做猜测。
 
+## 文档
+
+- AI 协作与改造入口：[docs/ai/AGENTS.md](docs/ai/AGENTS.md)（渐进式披露五层：入口速查 → 概览 → 架构 → 服务端/前端模块 → 约束红线与已知坑）。
+
 ## 测试
 
 ```bash
