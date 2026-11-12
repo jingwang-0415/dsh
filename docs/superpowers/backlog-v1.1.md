@@ -163,3 +163,24 @@
 ## 流程备注
 
 - 门禁实践：代理劫持机器上跑聚焦测试后再宣布全绿（黑洞测试 flake 曾在对抗 env 下复现——已修）
+
+---
+
+# v1.5 收官附录（2026-11-12，指定 git 配置 + AI 工程文档 + 一键跑通）
+
+## 已交付
+
+- 按仓 gitConfigPath：GIT_CONFIG_GLOBAL=<指定文件> 映射（与 bypass 互斥 refine + API 生效态互斥；PATCH null 显式 unset 与 httpProxy 先例同构；existsSync 时点校验 400 git_config_not_found）
+- AI 工程文档五层渐进式披露：AGENTS.md 入口（41 行）/概览/架构/服务端 15 模块/web 5 视图/约束红线与已知坑（60+ 处引用抽验零失实）
+- scripts/doctor.sh（5 项体检+修复提示）+ scripts/setup.sh（幂等装配）+ package.json 薄封装 + README 依赖清单与一键跑通段
+
+## 运维事故复盘（重要）
+
+- 多次"重启"仅杀 bash 包装层，node 子进程存活持端口——验收首_run 打到陈旧 v1.3.1 僵尸进程（其 scheduler 挂起 fetch 亦系旧代码超时缺陷）。**固定步骤：重启前 ps+lsof 核实端口归属与进程树全灭**
+- 僵尸进程内的挂起 fetch（SIGKILL 留孤儿）经手动 kill -9 孤儿树后立即落定 ok——与 4cd6e09 修复机制互证（该修复后新进程不会再挂）
+
+## v1.6 池
+
+- reposapi describe 级 cleanupTracked 泄漏（v1.4 遗留，文件级收敛后待差集补）
+- POST 400/409 定序契约化；gitConfigPath 运行中被删的 git 报错呈现（lifecycle 文档化）
+- AI 文档"空 -c 对"措辞修正（Minor 5，随下次文档维护）
