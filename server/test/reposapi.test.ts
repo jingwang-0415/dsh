@@ -75,13 +75,15 @@ describe('仓库生命周期 API（真实 config 文件 fixture）', () => {
 
     const list = await handle.app.inject({ method: 'GET', url: '/api/repos' })
     expect(list.json().map((r: { id: string }) => r.id)).toEqual(['r1', 'r2', 'beta'])
-    // GET /api/repos 契约（fix round 1）：基础六键恒在（含 branchExclude 与 bypassGitConfig
-    // default false）；httpProxy 仅显式设置时出现——undefined → JSON 省键（未设=跟随系统 git 配置）
+    // GET /api/repos 契约（fix round 1，v1.5 扩八字段）：基础六键恒在（含 branchExclude 与
+    // bypassGitConfig default false）；httpProxy/gitConfigPath 仅显式设置时出现——
+    // undefined → JSON 省键（未设=跟随系统 git 配置 / 使用机器级全局配置）
     for (const row of list.json()) {
-      expect(Object.keys(row).filter(k => k !== 'httpProxy')).toEqual([
+      expect(Object.keys(row).filter(k => k !== 'httpProxy' && k !== 'gitConfigPath')).toEqual([
         'id', 'url', 'defaultBranch', 'branchExclude', 'pollIntervalSeconds', 'bypassGitConfig'
       ])
       expect('httpProxy' in row).toBe(row.httpProxy !== undefined)
+      expect('gitConfigPath' in row).toBe(row.gitConfigPath !== undefined)
     }
     expect(handle.schedulers.length).toBe(before + 1)
 
@@ -292,6 +294,17 @@ describe('仓库生命周期 API（真实 config 文件 fixture）', () => {
     expect((await handle.app.inject({ method: 'DELETE', url: '/api/repos/zeta' })).statusCode).toBe(200)
   })
 
+  it('POST gitConfigPath 空串 → 400 invalid（repoSchema min(1) 空串收口，不落 existsSync(\'\') 的空路径文案）', async () => {
+    const res = await handle.app.inject({
+      method: 'POST', url: '/api/repos', payload: { id: 'emptycfg', url: o3.dir, gitConfigPath: '' }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'invalid' })
+    expect((res.json() as { message: string }).message).toContain('gitConfigPath')
+    expect(onDiskRepoIds()).not.toContain('emptycfg')
+    expect(handle.schedulers.some(s => s.repoId === 'emptycfg')).toBe(false)
+  })
+
   it('PATCH 更新 gitConfigPath → 200 回显/磁盘（原位变更锁）；PATCH 不存在路径 → 400 且原值保留', async () => {
     const cfgFile = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-gitcfg-patch-'))), 'gitconfig')
     writeFileSync(cfgFile, '[user]\n\tname = gsm-test\n')
@@ -310,13 +323,26 @@ describe('仓库生命周期 API（真实 config 文件 fixture）', () => {
     const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as { repos: { id: string; gitConfigPath?: string }[] }
     expect(cfg.repos.find(r => r.id === 'eta')).toMatchObject({ gitConfigPath: cfgFile })
 
+    // 更新路径回显：已设档案换另一真实档案 → 200 新路径回显（响应/内存/磁盘），原位锁保持
+    const cfgFile2 = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-gitcfg-patch2-'))), 'gitconfig2')
+    writeFileSync(cfgFile2, '[user]\n\tname = gsm-test-2\n')
+    const patch2 = await handle.app.inject({
+      method: 'PATCH', url: '/api/repos/eta', payload: { gitConfigPath: cfgFile2 }
+    })
+    expect(patch2.statusCode).toBe(200)
+    expect(patch2.json()).toMatchObject({ id: 'eta', gitConfigPath: cfgFile2 })
+    expect(handle.config.repos.find(r => r.id === 'eta')).toBe(repoRef)
+    expect(handle.config.repos.find(r => r.id === 'eta')!.gitConfigPath).toBe(cfgFile2)
+    const cfg2 = JSON.parse(readFileSync(configPath, 'utf8')) as { repos: { id: string; gitConfigPath?: string }[] }
+    expect(cfg2.repos.find(r => r.id === 'eta')).toMatchObject({ gitConfigPath: cfgFile2 })
+
     // PATCH 不存在路径 → 400 git_config_not_found（创建/PATCH 时点校验），原值保留
     const bad = await handle.app.inject({
       method: 'PATCH', url: '/api/repos/eta', payload: { gitConfigPath: '/nonexistent/gsm/patch' }
     })
     expect(bad.statusCode).toBe(400)
     expect(bad.json()).toMatchObject({ code: 'git_config_not_found' })
-    expect(handle.config.repos.find(r => r.id === 'eta')!.gitConfigPath).toBe(cfgFile)
+    expect(handle.config.repos.find(r => r.id === 'eta')!.gitConfigPath).toBe(cfgFile2)
 
     await awaitSettled('eta')
     expect((await handle.app.inject({ method: 'DELETE', url: '/api/repos/eta' })).statusCode).toBe(200)

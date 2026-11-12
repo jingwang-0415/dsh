@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { api, type RepoConfigDto, type RepoDto, type StatusDto } from '../api'
 
 const repos = ref<RepoDto[]>([])
@@ -17,6 +17,8 @@ type ProxyMode = 'system' | 'none' | 'custom'
 const formBypass = ref(false)
 const formProxyMode = ref<ProxyMode>('system')
 const formProxy = ref('')
+// v1.5 按仓指定 git 配置档案（可选）：空 = 使用机器级全局配置（POST 省键/PATCH 发 null unset）
+const formGitConfig = ref('')
 
 // 代理三态载荷构造（v1.4，POST 与 PATCH 共用同一构造；契约见 server repoSchema/PATCH：
 // undefined=跟随系统 git 配置、''=强制无代理、非空=显式代理）：
@@ -26,20 +28,32 @@ const formProxy = ref('')
 //   已设代理的仓可经 UI 还原为跟随系统；省键会被服务端理解为"不改动"，承载不了该语义）；
 //   POST → 省键（新建即跟随系统）。custom 且输入为空被 validate 先行拦截，此处兜底按目标
 //   语义处理：patch → httpProxy:null（显式 unset）、post → 省键——绝不静默降级成另一态
-function transportFields(bypass: boolean, mode: ProxyMode, proxyRaw: string, target: 'post' | 'patch'): { bypassGitConfig: boolean; httpProxy?: string | null } {
+// v1.5 gitConfigPath 同构造（与代理/env 正交，可组合）：
+// - 非空（trim 后）→ gitConfigPath:<值>；bypass 为真时联动已清空，此处兜底按空处理（互斥先拦）
+// - 空 + POST → 省键（undefined，T1 语义：新建未指定 = 使用机器级全局配置）
+// - 空 + PATCH → null（显式 unset）：省键=服务端"不改动"，既清不掉存量路径，也会让
+//   "存量路径 + PATCH bypass:true"撞服务端生效态互斥 400——单次保存切换必须显式 null
+function transportFields(bypass: boolean, mode: ProxyMode, proxyRaw: string, gitPathRaw: string, target: 'post' | 'patch'): { bypassGitConfig: boolean; httpProxy?: string | null; gitConfigPath?: string | null } {
   const proxy = proxyRaw.trim()
   const proxyField: { httpProxy?: string | null } =
     mode === 'custom' && proxy ? { httpProxy: proxy }
       : mode === 'none' ? { httpProxy: '' }
         : target === 'patch' ? { httpProxy: null }
           : {}
-  return { bypassGitConfig: bypass, ...proxyField }
+  const gitPath = bypass ? '' : gitPathRaw.trim()
+  const gitConfigField: { gitConfigPath?: string | null } =
+    gitPath ? { gitConfigPath: gitPath }
+      : target === 'patch' ? { gitConfigPath: null }
+        : {}
+  return { bypassGitConfig: bypass, ...proxyField, ...gitConfigField }
 }
 
 // T1 裁定：GET 行 httpProxy 未设省键（DTO optional）——读取一律经此兜底，
 // 表格标记与编辑预填共用，键省略时不误渲染"代理"/不误预填
 const bypassOf = (r: RepoDto): boolean => r.bypassGitConfig ?? false
 const proxyOf = (r: RepoDto): string => ('httpProxy' in r ? (r.httpProxy ?? '') : '')
+// v1.5 同款兜底：gitConfigPath 未设省键（undefined=使用机器级全局配置）
+const gitCfgOf = (r: RepoDto): string => r.gitConfigPath ?? ''
 // 省键 → system、'' → none、非空 → custom（表格四态判定与编辑预填共用）
 const proxyModeOf = (r: RepoDto): ProxyMode => {
   const raw = 'httpProxy' in r ? r.httpProxy : undefined
@@ -88,11 +102,11 @@ async function onAdd(): Promise<void> {
   const globs = formExclude.value.split(',').map(s => s.trim()).filter(Boolean)
   if (globs.length) body.branchExclude = globs
   if (formInterval.value.trim()) body.pollIntervalSeconds = Number(formInterval.value)
-  Object.assign(body, transportFields(formBypass.value, formProxyMode.value, formProxy.value, 'post'))
+  Object.assign(body, transportFields(formBypass.value, formProxyMode.value, formProxy.value, formGitConfig.value, 'post'))
   try {
     await api.addRepo(body)
     formId.value = ''; formUrl.value = ''; formBranch.value = ''; formInterval.value = ''; formExclude.value = ''
-    formBypass.value = false; formProxyMode.value = 'system'; formProxy.value = ''
+    formBypass.value = false; formProxyMode.value = 'system'; formProxy.value = ''; formGitConfig.value = ''
     await refresh()
   } catch (e) {
     error.value = (e as Error).message
@@ -132,7 +146,14 @@ const editExclude = ref('')
 const editBypass = ref(false)
 const editProxyMode = ref<ProxyMode>('system')
 const editProxy = ref('')
+// v1.5 行内编辑态的 git 配置档案输入（startEdit 预填当前行值，空 = 机器级全局配置）
+const editGitConfig = ref('')
 const URL_IMMUTABLE_HINT = 'url 不可修改，更换地址请删除后重新添加'
+
+// 互斥联动（服务端 400 mutually_exclusive 的前端先拦）：勾直连 → 清空并禁用 gitConfigPath
+// 输入（:disabled 绑定）；反向在模板绑——填了路径 → 直连 checkbox 禁用（添加表单与行内编辑同构）
+watch(formBypass, on => { if (on) formGitConfig.value = '' })
+watch(editBypass, on => { if (on) editGitConfig.value = '' })
 
 function startEdit(r: RepoDto): void {
   editingId.value = r.id
@@ -142,6 +163,7 @@ function startEdit(r: RepoDto): void {
   editBypass.value = bypassOf(r)
   editProxyMode.value = proxyModeOf(r)
   editProxy.value = proxyOf(r)
+  editGitConfig.value = gitCfgOf(r)   // v1.5 预填（未设省键 → ''）
   error.value = ''
 }
 
@@ -172,13 +194,14 @@ async function onSave(): Promise<void> {
   if (v) { error.value = v; return }
   try {
     // 载荷白名单（无 url/id）；排除 glob 逗号拆分（与添加表单同款 filter(Boolean) 语义）；
-    // 传输两键经 transportFields 同一三态构造（patch 目标：跟随系统发 httpProxy:null 显式
-    // unset——省键=服务端不改动，承载不了"还原跟随系统"）
+    // 传输键经 transportFields 同一构造（patch 目标：跟随系统发 httpProxy:null 显式 unset——
+    // 省键=服务端不改动，承载不了"还原跟随系统"；gitConfigPath 空输入发 null unset，
+    // 既有路径可清、"存量路径 → 直连"单次保存可达——省键会撞服务端生效态互斥 400）
     await api.updateRepo(editingId.value, {
       pollIntervalSeconds: Number(String(editInterval.value).trim()),
       defaultBranch: editBranch.value.trim(),
       branchExclude: editExclude.value.split(',').map(s => s.trim()).filter(Boolean),
-      ...transportFields(editBypass.value, editProxyMode.value, editProxy.value, 'patch')
+      ...transportFields(editBypass.value, editProxyMode.value, editProxy.value, editGitConfig.value, 'patch')
     })
     editingId.value = ''
     error.value = ''
@@ -212,7 +235,8 @@ onMounted(() => { void refresh() })
         <span class="transport-title">网络连接方式</span>
         <label class="inline-check"
           title="勾选后，拉取代码时忽略本机 git 全局配置（含代理与凭据助手），直接连接目标仓库。适用于本机 git 配置了代理/改写导致外部仓库不可达的场景；注意私有仓库的存储凭据在此模式下失效">
-          <input type="checkbox" class="add-bypass" v-model="formBypass" /> 忽略本机 git 配置直连
+          <!-- 反向互斥：填了自定义配置文件 → 直连禁用（服务端生效态 400 mutually_exclusive，前端先拦） -->
+          <input type="checkbox" class="add-bypass" v-model="formBypass" :disabled="formGitConfig.trim() !== ''" /> 忽略本机 git 配置直连
         </label>
         <label class="proxy-mode-row">
           代理
@@ -227,6 +251,16 @@ onMounted(() => { void refresh() })
           title="显式代理地址，如 http://127.0.0.1:8080"
           placeholder="http://…"
         />
+        <!-- v1.5 按仓指定 git 配置档案（可选，与代理/env 正交可组合）：
+             与直连互斥——勾直连清空并禁用本输入，填了路径则禁用直连 checkbox -->
+        <label class="gitcfg-row">
+          自定义 git 配置文件（可选）
+          <input
+            class="add-gitcfg" v-model="formGitConfig" :disabled="formBypass"
+            title="以该文件作为本仓 git 全局配置（GIT_CONFIG_GLOBAL）；与直连互斥"
+            placeholder="/path/to/git-config"
+          />
+        </label>
       </div>
       <button class="btn" type="submit">添加</button>
     </form>
@@ -252,7 +286,8 @@ onMounted(() => { void refresh() })
           <td class="transport-cell">
             <template v-if="editingId === r.id">
               <label class="inline-check" title="勾选后，拉取代码时忽略本机 git 全局配置（含代理与凭据助手），直接连接目标仓库">
-                <input type="checkbox" class="edit-bypass" v-model="editBypass" /> 忽略配置
+                <!-- 反向互斥：填了自定义配置文件 → 直连禁用（与添加表单同款） -->
+                <input type="checkbox" class="edit-bypass" v-model="editBypass" :disabled="editGitConfig.trim() !== ''" /> 忽略配置
               </label>
               <select class="edit-proxy-mode" v-model="editProxyMode" title="网络连接方式：跟随本机 git 配置 / 不走代理（强制无代理）/ 通过指定代理服务器连接">
                 <option value="system">跟随本机配置</option>
@@ -260,12 +295,20 @@ onMounted(() => { void refresh() })
                 <option value="custom">指定代理</option>
               </select>
               <input v-if="editProxyMode === 'custom'" class="edit-proxy" v-model="editProxy" placeholder="http://…" />
+              <!-- v1.5 git 配置档案输入：勾直连清空并禁用（watcher + :disabled） -->
+              <input
+                class="edit-gitcfg" v-model="editGitConfig" :disabled="editBypass"
+                title="以该文件作为本仓 git 全局配置（GIT_CONFIG_GLOBAL）；与直连互斥"
+                placeholder="/path/to/git-config"
+              />
             </template>
             <template v-else>
               <span v-if="bypassOf(r)" class="badge badge-blue" title="忽略本机 git 配置直连">直连</span>
               <span v-else-if="proxyOf(r)" class="badge badge-yellow" :title="proxyOf(r)">代理</span>
               <span v-else-if="'httpProxy' in r" class="muted" title="httpProxy 显式置空：强制无代理">无代理</span>
               <span v-else class="muted" title="未显式设置：跟随本机 git 配置">—</span>
+              <!-- v1.5 指定配置档案：与代理/直连状态正交（可组合），独立角标展示、title 携带路径 -->
+              <span v-if="gitCfgOf(r)" class="muted" :title="`自定义 git 配置文件: ${gitCfgOf(r)}`">档案</span>
             </template>
           </td>
           <td><span class="badge" :class="badge(r).cls">{{ badge(r).text }}</span></td>
@@ -300,6 +343,8 @@ onMounted(() => { void refresh() })
 .inline-check { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .inline-check input { min-width: 0; }
 .proxy-mode-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+/* v1.5 git 配置档案行：与代理行同视觉语言（label 包文字+输入） */
+.gitcfg-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .transport-group select { padding: 4px 8px; border-radius: 6px; border: 1px solid #d0d7de; }
 .add-proxy { padding: 4px 8px; border-radius: 6px; border: 1px solid #d0d7de; min-width: 280px; }
 .transport-cell { white-space: nowrap; }

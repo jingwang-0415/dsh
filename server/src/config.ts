@@ -32,8 +32,9 @@ export const repoSchema = z.object({
   httpProxy: z.string().optional(),
   // 按仓指定 git 配置档案（v1.5）：缺省 undefined = 使用机器级全局配置（存量行为不变）；
   // 与 bypassGitConfig 互斥（下方 schema 级 refine 挡）——bypass 清空全部配置档案，
-  // 再指定档案属语义矛盾；文件存在性由 api 层 existsSync 校验（config 层不做 IO）
-  gitConfigPath: z.string().optional()
+  // 再指定档案属语义矛盾；文件存在性由 api 层 existsSync 校验（config 层不做 IO）；
+  // min(1) 空串收口：'' 在此 400 invalid，不落 api 层 existsSync('') 的"空路径不存在"文案
+  gitConfigPath: z.string().min(1).optional()
 })
 // schema 级 refine：双设即拒（loadConfig 启动挡 + POST safeParse 400 invalid 透传）。
 // refine 在 default 填充后运行，data.bypassGitConfig 恒为 boolean；

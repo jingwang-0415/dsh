@@ -49,6 +49,8 @@ export interface RepoDto {
   id: string; url: string; defaultBranch: string; branchExclude: string[]; pollIntervalSeconds: number
   bypassGitConfig?: boolean
   httpProxy?: string
+  // v1.5 按仓指定 git 配置档案：未设省键（undefined=使用机器级全局配置），读侧 `?? ''` 兜底
+  gitConfigPath?: string
 }
 
 // v1.3 仓库生命周期：POST /api/repos 请求体。可选字段缺省 = 服务端 zod default（master/[]/30），
@@ -63,6 +65,9 @@ export interface RepoConfigDto {
   // （undefined=跟随系统 git 配置，''=强制无代理，非空=显式代理），见 RepoDto 注
   bypassGitConfig?: boolean
   httpProxy?: string
+  // v1.5 按仓指定 git 配置档案：非空 = 指定档案（服务端校验存在性）；未设省键
+  // （undefined=使用机器级全局配置）；空串服务端 repoSchema min(1) 拒 400，UI 空输入省键不发
+  gitConfigPath?: string
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -131,9 +136,9 @@ export const api = {
   addRepo: (body: RepoConfigDto): Promise<RepoDto> => sendJson('/api/repos', 'POST', body),
   // id 进路径：encodeURIComponent 纪律（与 withRepo 查询串转义同源）
   removeRepo: (id: string): Promise<{ ok: true }> => sendJson(`/api/repos/${encodeURIComponent(id)}`, 'DELETE'),
-  // 行内编辑（v1.3.1，v1.3.2 扩至七字段）：PATCH 成功返回与 GET /api/repos 行同形的七字段行
-  // （id/url/defaultBranch/branchExclude/pollIntervalSeconds/bypassGitConfig/httpProxy，
-  // httpProxy 未设时 JSON 省键）；错误走 sendJson 通道
+  // 行内编辑（v1.3.1，v1.3.2 扩至七字段，v1.5 扩至八字段）：PATCH 成功返回与 GET /api/repos
+  // 行同形的八字段行（id/url/defaultBranch/branchExclude/pollIntervalSeconds/bypassGitConfig/
+  // httpProxy/gitConfigPath，未设时 JSON 省键）；错误走 sendJson 通道
   // message 优先、code 兜底（400 invalid 透传校验详情 / 500 config_write_failed）
   updateRepo: (id: string, patch: RepoPatchDto): Promise<RepoDto> =>
     sendJson(`/api/repos/${encodeURIComponent(id)}`, 'PATCH', patch),
@@ -153,17 +158,20 @@ export interface SyncResultDto {
   message?: string
 }
 
-// v1.3.1 行内编辑：PATCH /api/repos/:id 请求体 = 五键白名单（契约见 server/test/reposapi.test.ts）。
+// v1.3.1 行内编辑：PATCH /api/repos/:id 请求体 = 白名单键（契约见 server/test/reposapi.test.ts）。
 // url/id 是仓的身份键，服务端一票拒绝（url_immutable），前端载荷也绝不携带。
 // v1.3.2 传输兜底两键入白名单；httpProxy JSON Merge Patch 风格四值语义：
 // null = 显式 unset（服务端删字段，回到跟随系统 git 配置）；'' = 强制无代理；
 // 非空 = 显式代理；键缺省 = 不改动（存量语义保留）
+// v1.5 gitConfigPath 入白名单：同 JSON Merge Patch 风格——null = 显式 unset（回到机器级全局
+// 配置）；非空 = 指定档案；键缺省 = 不改动；空串不合法（server repoSchema min(1)），UI 空输入发 null
 export interface RepoPatchDto {
   pollIntervalSeconds?: number
   defaultBranch?: string
   branchExclude?: string[]
   bypassGitConfig?: boolean
   httpProxy?: string | null
+  gitConfigPath?: string | null
 }
 
 export function formatRelative(ts: number, now = Date.now()): string {
