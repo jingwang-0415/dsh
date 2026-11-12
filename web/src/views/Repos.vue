@@ -210,15 +210,16 @@ onMounted(() => { void refresh() })
            none httpProxy:'' / custom httpProxy:<输入值>（输入框仅 custom 态显现） -->
       <div class="transport-group">
         <span class="transport-title">网络连接方式</span>
-        <label class="inline-check">
-          <input type="checkbox" class="add-bypass" v-model="formBypass" /> 绕过系统 git 配置（直连外部仓库）
+        <label class="inline-check"
+          title="勾选后，拉取代码时忽略本机 git 全局配置（含代理与凭据助手），直接连接目标仓库。适用于本机 git 配置了代理/改写导致外部仓库不可达的场景；注意私有仓库的存储凭据在此模式下失效">
+          <input type="checkbox" class="add-bypass" v-model="formBypass" /> 忽略本机 git 配置直连
         </label>
         <label class="proxy-mode-row">
           代理
-          <select class="add-proxy-mode" v-model="formProxyMode" title="代理三态：跟随系统 git 配置 / 强制直连（无代理）/ 通过代理服务器连接">
-            <option value="system">跟随系统 git 配置</option>
-            <option value="none">强制直连（无代理）</option>
-            <option value="custom">通过代理服务器连接</option>
+          <select class="add-proxy-mode" v-model="formProxyMode" title="代理三态：跟随本机 git 配置 / 不走代理（强制无代理）/ 通过指定代理服务器连接">
+            <option value="system">跟随本机 git 配置</option>
+            <option value="none">不走代理（强制无代理）</option>
+            <option value="custom">通过指定代理服务器连接</option>
           </select>
         </label>
         <input
@@ -250,21 +251,21 @@ onMounted(() => { void refresh() })
                读取经 bypassOf/proxyModeOf 兜底——GET 行 httpProxy 未设省键不误渲染 -->
           <td class="transport-cell">
             <template v-if="editingId === r.id">
-              <label class="inline-check" title="绕过系统 git 配置（直连外部仓库）">
-                <input type="checkbox" class="edit-bypass" v-model="editBypass" /> 绕过配置
+              <label class="inline-check" title="勾选后，拉取代码时忽略本机 git 全局配置（含代理与凭据助手），直接连接目标仓库">
+                <input type="checkbox" class="edit-bypass" v-model="editBypass" /> 忽略配置
               </label>
-              <select class="edit-proxy-mode" v-model="editProxyMode" title="代理三态">
-                <option value="system">跟随系统</option>
-                <option value="none">强制直连</option>
-                <option value="custom">自定义代理</option>
+              <select class="edit-proxy-mode" v-model="editProxyMode" title="网络连接方式：跟随本机 git 配置 / 不走代理（强制无代理）/ 通过指定代理服务器连接">
+                <option value="system">跟随本机配置</option>
+                <option value="none">不走代理</option>
+                <option value="custom">指定代理</option>
               </select>
               <input v-if="editProxyMode === 'custom'" class="edit-proxy" v-model="editProxy" placeholder="http://…" />
             </template>
             <template v-else>
-              <span v-if="bypassOf(r)" class="badge badge-blue" title="绕过系统 git 配置">直连</span>
+              <span v-if="bypassOf(r)" class="badge badge-blue" title="忽略本机 git 配置直连">直连</span>
               <span v-else-if="proxyOf(r)" class="badge badge-yellow" :title="proxyOf(r)">代理</span>
               <span v-else-if="'httpProxy' in r" class="muted" title="httpProxy 显式置空：强制无代理">无代理</span>
-              <span v-else class="muted" title="未显式设置：跟随系统 git 配置">—</span>
+              <span v-else class="muted" title="未显式设置：跟随本机 git 配置">—</span>
             </template>
           </td>
           <td><span class="badge" :class="badge(r).cls">{{ badge(r).text }}</span></td>

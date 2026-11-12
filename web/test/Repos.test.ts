@@ -272,7 +272,7 @@ describe('Repos 视图（仓库管理）', () => {
     expect(sel.exists()).toBe(true)
     expect((sel.element as HTMLSelectElement).value).toBe('system')
     expect(sel.findAll('option').map(o => o.text())).toEqual([
-      '跟随系统 git 配置', '强制直连（无代理）', '通过代理服务器连接'
+      '跟随本机 git 配置', '不走代理（强制无代理）', '通过指定代理服务器连接'
     ])
   })
 
