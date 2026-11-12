@@ -248,7 +248,7 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
         message: `指定的 git 配置文件不存在: ${patch.gitConfigPath}`
       })
     }
-    // 回滚纪律同 POST/DELETE：变更前 snapshot 旧五字段，writeConfig 失败 → 原位 assign 回旧值
+    // 回滚纪律同 POST/DELETE：变更前 snapshot 旧六字段，writeConfig 失败 → 原位 assign 回旧值
     // （仍是同一对象，调度器引用不断）+ 500，保持 config 内存与磁盘一致
     const snapshot = {
       pollIntervalSeconds: repo.pollIntervalSeconds,

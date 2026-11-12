@@ -65,6 +65,8 @@ fi
 
 # ---- 4) better-sqlite3 原生模块可加载（在 server 包内 require + 内存库实例化探针）----
 echo "[4/5] better-sqlite3 原生模块可加载"
+# 运行时解析口径（与 [1/5] node 检测同源）：优先 PATH node，PATH 无裸 node 时回退 pnpm exec node
+# （DSH pnpm 的 Electron 内嵌 Node）——探针 ABI 即实际运行 server 的 Node ABI
 sqlite_err="$(cd server && pnpm exec node -e "const D=require('better-sqlite3');new D(':memory:');console.log('abi '+process.versions.modules)" 2>&1 || true)"
 if [ -n "$sqlite_err" ] && printf '%s' "$sqlite_err" | grep -q '^abi '; then
   ok "better-sqlite3 加载成功（$(printf '%s' "$sqlite_err" | tail -1)，与运行时 ABI 匹配）"
@@ -80,7 +82,9 @@ config_path="${GSM_CONFIG:-$HOME/.git-sync-monitor/config.json}"
 writable() {
   mkdir -p "$1" 2>/dev/null || return 1
   local probe="$1/.gsm-doctor-probe-$$"
-  : > "$probe" 2>/dev/null || return 1
+  # 组内重定向：2>/dev/null 先于组内 > "$probe" 生效（重定向自左向右处理），
+  # 目标不可写时 shell 的"打开失败"报错走已转向的 stderr，不泄漏到终端
+  { : > "$probe"; } 2>/dev/null || return 1
   rm -f "$probe"
 }
 d_src="默认值"; [ -n "${GSM_DATA:-}" ] && d_src="GSM_DATA"

@@ -18,7 +18,7 @@ crossrepo.ts → patchid.ts；sync.ts → parse.ts；config.ts → util/glob.ts
 ## index.ts（进程入口，21 行）
 
 - **职责**：env 解析（`GSM_CONFIG`/`GSM_DATA`，缺省 `~/.git-sync-monitor/`）→ `buildApp` → `schedulers.forEach(start)` → `app.listen` → SIGINT/SIGTERM 优雅退出。
-- **关键契约**：close 失败必须 `process.exit(1)`——以 0 退出会骗过进程管理器（文件头注释即此教训）。
+- **关键契约**：close 失败必须 `process.exit(1)`——以 0 退出会骗过进程管理器（教训写在信号处理块内注释，非文件头）。
 - **测试位置**：`server/test/smoke.test.ts`（ping 冒烟）；退出语义无直测，靠 `graceful-shutdown.test.ts` 覆盖 close 本体。
 - **改前先看**：`app.ts` 的 close 顺序注释；不要在这里加业务逻辑，它是唯一允许顶层 await 的文件。
 

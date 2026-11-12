@@ -25,10 +25,10 @@
 
 ### R5 传输三分支与互斥语义
 - **语义**（`mirror.ts` 的 `transportArgs`/`transportOptsEnv`）：
-  - `httpProxy: undefined` = 跟随系统 git 配置，**不注入任何参数**（存量仓行为逐字节不变）；`''` = 强制无代理（空 `-c http.proxy=` 对，压过全局配置与 env 代理）；非空 = 显式代理（http+https 两对 -c）。三者不可混用：`default('')` 曾被明确否决——会让存量仓升级即静默断连。
+  - `httpProxy: undefined` = 跟随系统 git 配置，**不注入任何参数**（存量仓行为逐字节不变）；`''` = 强制无代理（http/https 两对空值 -c，压过全局配置与 env 代理）；非空 = 显式代理（http+https 两对 -c）。组合优先级：`-c http.proxy` 的显式值/空串均压过 `GIT_CONFIG_GLOBAL` 档案内 proxy——命令行优先级高于全局档案。三者不可混用：`default('')` 曾被明确否决——会让存量仓升级即静默断连。
   - `bypassGitConfig` → env `GIT_CONFIG_GLOBAL/SYSTEM=/dev/null`；`gitConfigPath` → 仅 `GIT_CONFIG_GLOBAL=<path>`（机器级配置保留）；bypass **defensive 优先**（schema refine 已禁双设，mirror 层仍以防万一）。
   - 互斥在三层拦：`config.ts` repoSchema refine（启动 + POST 400 invalid）、`api.ts` PATCH 生效态判定（400 mutually_exclusive）、mirror 层 defensive。前端 `Repos.vue` 的 `transportFields` 补先行拦截。
-- **警示**：`httpProxy: ''` 是"静默强制无代理"——误解即断连（README 传输兜底节有显式警示）。`gitConfigPath` 无空串特例：`''` 走 existsSync → 400 git_config_not_found，不存在"空路径=清除"语义；清除用 `null`。
+- **警示**：`httpProxy: ''` 是"静默强制无代理"——误解即断连（README 传输兜底节有显式警示）。`gitConfigPath` 空串被 repoSchema `min(1)` 拒（400 invalid，空串收口——不落 api 层 `existsSync('')` 的空路径文案），不存在"空路径=清除"语义；清除用 `null`。
 - **凭据面副作用**：bypass 清空全局/系统配置 → credential.helper 一并失效，私有 https 仓需令牌内嵌 URL 或匿名可达（mirror.ts 头注释）。
 
 ### R6 PATCH 原位变更，禁整体替换

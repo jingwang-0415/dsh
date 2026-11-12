@@ -34,7 +34,7 @@ web connectEvents 回调 → 视图 refresh()                web/src/api.ts + vi
 1. **repo 对象引用原位共享**：`app.ts` 装配把 `config.repos` 中的仓对象直接传给 `Scheduler({ repo })`，两侧是同一引用。PATCH 必须经 `config.ts` 的 `updateRepoFields`（Object.assign 只改字段）；任何 splice / 新对象整体替换都会让调度器继续持旧对象，运行时调整静默失效。
 2. **传输三分支省键语义**（`mirror.ts` 的 `transportArgs` / `transportOptsEnv`）：
    - `httpProxy: undefined` = 跟随系统 git 配置——**不注入任何代理参数**，spawn 行为与未传时逐字节一致；
-   - `httpProxy: ''` = 强制无代理（`-c http.proxy=` 空 -c 对）；非空 = 显式代理（http/https 两对 -c）。
+   - `httpProxy: ''` = 强制无代理（http/https 两对空值 -c）；非空 = 显式代理（http/https 两对 -c）。
    - `bypassGitConfig` → env `GIT_CONFIG_GLOBAL/SYSTEM=/dev/null`（defensive 优先于 gitConfigPath）；`gitConfigPath` → 仅 `GIT_CONFIG_GLOBAL=<path>`；均未设 → env 覆盖对象为空，调用方按空判断不加 `env` 键。bypass 与 gitConfigPath 互斥：config schema refine 挡输入，PATCH 按生效态挡，mirror 层再 defensive。
 3. **undefined 省键**：GET/POST/PATCH 返回行中未设的 `httpProxy`/`gitConfigPath` 直接省略（JSON 序列化行为）。前端读取一律 `?? false` / `'httpProxy' in r` 兜底（`web/src/views/Repos.vue` 的 `bypassOf`/`proxyOf`/`proxyModeOf`）。省键≠null：PATCH 里**键缺省=不改动**，`null`=显式 unset（JSON Merge Patch 风格，`config.ts` 的 `updateRepoFields`）。
 4. **写序与回滚纪律**：内存 `config.repos` 变更 → `writeConfig`（tmp + renameSync 原子落盘）成功 → DB upsert → `addScheduler`。writeConfig 失败必须把内存精确回滚（POST pop、DELETE splice 回插、PATCH 快照 assign——快照用 **null 哨兵**记录"原值未设"，否则回滚无法区分"不动"与"还原为未设"）。
@@ -60,7 +60,7 @@ web connectEvents 回调 → 视图 refresh()                web/src/api.ts + vi
 
 **调度循环**（`scheduler.ts`）
 
-- `loop` → `runOnce`（`running` 标志互斥，重入返回 `skipped`）→ 成功则 delay = `pollIntervalSeconds*1000`，失败则 `nextBackoffMs`（5s 起 2 倍指数，封顶 5 分钟）→ setTimeout 自排程；每一步 stop 后早退，不再排程。
+- `loop` → `runOnce`（`running` 标志互斥，重入返回 `skipped`）→ 成功则 delay = `pollIntervalSeconds*1000`，失败则 `nextBackoffMs`（5s 起 2 倍指数，封顶 5 分钟）→ setTimeout 自排程；stop 检查点在 loop 入口与每轮完成后两处，命中即早退不再排程。
 - 失败轮：错误消息匹配 `CORRUPT_RE`（corrupt / not a git repository）→ `rmSync` 整个镜像目录，下一轮自动重克隆自愈；`fetch_events` 记 failed + 退避计数 +1。
 - PATCH 的 `pollIntervalSeconds` / 传输字段在**下一轮循环取 delay / 下一轮 fetch** 生效（每轮从共享 repo 对象直取）。
 

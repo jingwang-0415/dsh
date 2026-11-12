@@ -19,7 +19,7 @@ export type RefSnapshot = { [branch: string]: string }
  */
 export type TransportOpts = { bypassGitConfig?: boolean; httpProxy?: string; gitConfigPath?: string }
 
-/** 纯函数：httpProxy undefined → []（不注入代理参数，bypass 亦不产生 args——走 env）；'' → 空 -c 对；非空 → 带值 -c 对 */
+/** 纯函数：httpProxy undefined → []（不注入代理参数，bypass 亦不产生 args——走 env）；'' → http/https 两对 -c（值均为空串）；非空 → 带值 -c 对 */
 export function transportArgs(opts: TransportOpts): string[] {
   if (opts.httpProxy === undefined) return []
   return ['-c', `http.proxy=${opts.httpProxy}`, '-c', `https.proxy=${opts.httpProxy}`]

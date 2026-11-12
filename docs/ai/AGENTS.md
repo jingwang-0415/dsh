@@ -5,7 +5,7 @@
 ## 一键命令
 
 ```bash
-pnpm setup                 # 体检+装配（v1.5 Task 3 交付 doctor/setup；落地前用下面手动序列）
+pnpm setup                 # 体检+装配（doctor/setup 已落地：pnpm setup 一键、pnpm doctor 单独体检；手动分步保留为兜底，见 README「快速开始」）
 pnpm install               # 依赖安装（better-sqlite3 需源码编译，排障见 README「环境要求与排障」节）
 pnpm dev                   # 开发：web 5173（/api 代理）+ server 43900
 pnpm test                  # server + web 全部 vitest（真实 git fixture，不 mock git 语义）
