@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import type Database from 'better-sqlite3'
+import { existsSync } from 'node:fs'
 import { MAX_POLL_INTERVAL_SECONDS, repoSchema, updateRepoFields, writeConfig, type AppConfig, type RepoConfig } from './config.js'
 import type { Scheduler } from './scheduler.js'
 import type { SseHub } from './sse.js'
@@ -68,10 +69,11 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
   })
 
   app.get('/api/repos', async () =>
-    // branchExclude 与传输兜底两字段一并暴露：UI 配置的排除 glob/直连/代理需可回读查看；
-    // httpProxy 未设时 undefined → JSON 省键（fix round 1 三分支语义：未设=跟随系统 git 配置）
-    config.repos.map(({ id, url, defaultBranch, branchExclude, pollIntervalSeconds, bypassGitConfig, httpProxy }) =>
-      ({ id, url, defaultBranch, branchExclude, pollIntervalSeconds, bypassGitConfig, httpProxy })
+    // branchExclude 与传输兜底字段一并暴露：UI 配置的排除 glob/直连/代理/指定配置档案需可回读查看；
+    // httpProxy/gitConfigPath 未设时 undefined → JSON 省键（fix round 1 三分支语义：
+    // 未设=跟随系统 git 配置；v1.5：gitConfigPath 未设=使用机器级全局配置）
+    config.repos.map(({ id, url, defaultBranch, branchExclude, pollIntervalSeconds, bypassGitConfig, httpProxy, gitConfigPath }) =>
+      ({ id, url, defaultBranch, branchExclude, pollIntervalSeconds, bypassGitConfig, httpProxy, gitConfigPath })
     )
   )
 
@@ -85,6 +87,15 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
       return reply.code(400).send({ code: 'invalid', message: detail })
     }
     const repo = parsed.data
+    // 按仓指定 git 配置档案（v1.5）：创建时点校验文件存在——放行会让每轮 fetch 以
+    // GIT_CONFIG_GLOBAL=<不存在路径> 运行（git 读不到档案，兜底静默失效）；
+    // 运行中被删不在此拦，由 git 报错如实呈现
+    if (repo.gitConfigPath !== undefined && !existsSync(repo.gitConfigPath)) {
+      return reply.code(400).send({
+        code: 'git_config_not_found',
+        message: `指定的 git 配置文件不存在: ${repo.gitConfigPath}`
+      })
+    }
     if (config.repos.some(r => r.id === repo.id)) {
       return reply.code(409).send({ code: 'repo_exists' })
     }
@@ -149,7 +160,7 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
     // 透传 invalid
     const patch: {
       pollIntervalSeconds?: number; defaultBranch?: string; branchExclude?: string[]
-      bypassGitConfig?: boolean; httpProxy?: string | null
+      bypassGitConfig?: boolean; httpProxy?: string | null; gitConfigPath?: string | null
     } = {}
     const issues: string[] = []
     if (body.pollIntervalSeconds !== undefined) {
@@ -198,13 +209,43 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
         issues.push('httpProxy: 需为字符串或 null')
       }
     }
+    if (body.gitConfigPath !== undefined) {
+      // 按仓指定 git 配置档案（v1.5）：null = 显式 unset（回到机器级全局配置，JSON Merge
+      // Patch 先例同 httpProxy）；字符串 = 指定档案（存在性校验在互斥检查后统一做）
+      if (body.gitConfigPath === null) {
+        patch.gitConfigPath = null
+      } else if (typeof body.gitConfigPath === 'string') {
+        patch.gitConfigPath = body.gitConfigPath
+      } else {
+        issues.push('gitConfigPath: 需为字符串或 null')
+      }
+    }
     if (issues.length > 0) {
       return reply.code(400).send({ code: 'invalid', message: issues.join('; ') })
     }
     if (Object.keys(patch).length === 0) {
       return reply.code(400).send({
         code: 'no_fields',
-        message: '无可更新字段（仅允许 pollIntervalSeconds/defaultBranch/branchExclude/bypassGitConfig/httpProxy）'
+        message: '无可更新字段（仅允许 pollIntervalSeconds/defaultBranch/branchExclude/bypassGitConfig/httpProxy/gitConfigPath）'
+      })
+    }
+    // 互斥（repoSchema refine 的运行时对应物，updateRepoFields 不拦组合）：按"生效态"判定——
+    // body 提供键覆盖 repo 现值后 bypass 与档案路径不得双真。仅查 body 组合会漏对角场景
+    // （存量 bypass=true + 仅 PATCH path），放行落盘的双真 config.json 会让重启 loadConfig
+    // 直接崩溃（服务不可用），必须在此源头封死；null（unset 哨兵）按"清除"参与判定
+    const effectiveBypass = patch.bypassGitConfig !== undefined ? patch.bypassGitConfig : repo.bypassGitConfig
+    const effectivePath = patch.gitConfigPath !== undefined ? patch.gitConfigPath : repo.gitConfigPath
+    if (effectiveBypass && effectivePath) {
+      return reply.code(400).send({
+        code: 'mutually_exclusive',
+        message: 'bypassGitConfig 与 gitConfigPath 互斥，请先关闭直连开关或清除配置文件路径'
+      })
+    }
+    if (typeof patch.gitConfigPath === 'string' && !existsSync(patch.gitConfigPath)) {
+      // 与 POST 同款创建/变更时点校验；运行中被删不在此拦，由 git 报错如实呈现
+      return reply.code(400).send({
+        code: 'git_config_not_found',
+        message: `指定的 git 配置文件不存在: ${patch.gitConfigPath}`
       })
     }
     // 回滚纪律同 POST/DELETE：变更前 snapshot 旧五字段，writeConfig 失败 → 原位 assign 回旧值
@@ -217,7 +258,8 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
       // null 哨兵表示"原值未设"：updateRepoFields(null) → delete 字段，writeConfig 失败
       // 回滚时能精确还原 unset 前状态（直接存 undefined 会让回滚无法区分"不动"与"还原为未设"，
       // 先设值后回滚会把新值残留在内存——内存与磁盘不一致）
-      httpProxy: repo.httpProxy ?? null
+      httpProxy: repo.httpProxy ?? null,
+      gitConfigPath: repo.gitConfigPath ?? null
     }
     updateRepoFields(repo, patch)
     try {
@@ -233,11 +275,11 @@ export async function registerApi(app: FastifyInstance, deps: ApiDeps): Promise<
       `INSERT INTO repos (id, url, default_branch, created_at) VALUES (?,?,?,?)
        ON CONFLICT(id) DO UPDATE SET default_branch=excluded.default_branch`
     ).run(repo.id, repo.url, repo.defaultBranch, Date.now())
-    // 返回形状与 GET /api/repos 行一致（七个字段）
+    // 返回形状与 GET /api/repos 行一致（八个字段；gitConfigPath 未设 undefined → JSON 省键）
     return {
       id: repo.id, url: repo.url, defaultBranch: repo.defaultBranch,
       branchExclude: repo.branchExclude, pollIntervalSeconds: repo.pollIntervalSeconds,
-      bypassGitConfig: repo.bypassGitConfig, httpProxy: repo.httpProxy
+      bypassGitConfig: repo.bypassGitConfig, httpProxy: repo.httpProxy, gitConfigPath: repo.gitConfigPath
     }
   })
 

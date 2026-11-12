@@ -107,10 +107,11 @@ export class Scheduler {
       this.running = true
       this.setStatus({ ...this.status, state: 'running' })
       eventId = startFetchEvent(db, repo.id)
-      // 按仓传输兜底（v1.3.2）：每轮从 this.deps.repo 直取（对象与 config.repos 原位共享，
-      // PATCH 传输字段下一 fetch 周期即生效，与 pollIntervalSeconds 同语义）；
-      // httpProxy undefined 时 transportArgs 不注入任何代理参数（未设=跟随系统 git 配置）
-      const transport = { bypassGitConfig: repo.bypassGitConfig, httpProxy: repo.httpProxy }
+      // 按仓传输兜底（v1.3.2；v1.5 增 gitConfigPath）：每轮从 this.deps.repo 直取（对象与
+      // config.repos 原位共享，PATCH 传输字段下一 fetch 周期即生效，与 pollIntervalSeconds 同语义）；
+      // httpProxy undefined 时 transportArgs 不注入任何代理参数（未设=跟随系统 git 配置）；
+      // gitConfigPath 未设时 transportOptsEnv 为空 → 不加 env 键（存量仓 spawn 行为逐字节不变）
+      const transport = { bypassGitConfig: repo.bypassGitConfig, httpProxy: repo.httpProxy, gitConfigPath: repo.gitConfigPath }
       const mirrorState = await ensureMirror(repo.url, mirrorDir, transport)
       const before = await snapshotRefs(mirrorDir)
       await fetchMirror(mirrorDir, transport)

@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanupTracked, createOriginRepo, trackTmp, withProxyEnvCleared } from './fixture.js'
 
 afterEach(cleanupTracked)
-import { ensureMirror, fetchMirror, snapshotRefs, transportArgs } from '../src/mirror.js'
+import { ensureMirror, fetchMirror, snapshotRefs, transportArgs, transportOptsEnv } from '../src/mirror.js'
 import { loadConfig } from '../src/config.js'
 
 // spawn 捕获桩：vi.spyOn 在本 vitest v3/ESM 环境对 node 内建模块不可行
@@ -217,5 +217,70 @@ describe('mirror 传输兜底（真实 git 行为）', () => {
     expect(gitCalls).toHaveLength(1)
     expect(gitCalls[0][1].slice(0, 4)).toEqual(['-c', 'http.proxy=', '-c', 'https.proxy='])
     expect(gitCalls[0][2] != null && 'env' in gitCalls[0][2]).toBe(false)   // bypass 未开 → 无 env 覆盖
+  })
+
+  it('spawn 透传：gitConfigPath → spawn opts.env.GIT_CONFIG_GLOBAL=<path> 且无 -c 前缀（SYSTEM 键不出现）', async () => {
+    const cfgFile = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-tp-gc-spawn-'))), 'gitconfig')
+    writeFileSync(cfgFile, '[user]\n\tname = gsm-test\n')
+    const origin = createOriginRepo('gsm-tp-gc-')
+    const mirrorDir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-tp-gc-m-'))), 'm.git')
+    spawnCalls.length = 0
+    await ensureMirror(origin.dir, mirrorDir, { gitConfigPath: cfgFile })
+    await fetchMirror(mirrorDir, { gitConfigPath: cfgFile })
+    const gitCalls = spawnCalls.filter(([bin]) => bin === 'git')
+    expect(gitCalls).toHaveLength(2)   // clone + fetch 真实执行
+    for (const [, args, opts] of gitCalls) {
+      expect(args).not.toContain('-c')   // gitConfigPath 走 env，不注入任何 -c 参数
+      const env = (opts as { env?: Record<string, string> }).env
+      expect(env?.GIT_CONFIG_GLOBAL).toBe(cfgFile)            // runGit 在 process.env 基础上覆盖
+      expect(env != null && 'GIT_CONFIG_SYSTEM' in env).toBe(false)   // SYSTEM 保留机器级
+    }
+  })
+
+  it('gitConfigPath 覆盖劫持：进程级 GIT_CONFIG_GLOBAL 劫持代理 + 指定干净配置文件 → clone 直连成功（真实 git 行为）', async () => {
+    // 与 bypass 劫持用例同构：runGit 的 env 合并语义（{...process.env, ...env}）让指定档案
+    // 压过继承的劫持配置——本用例实证 env 键真到达 git 且覆盖语义正确（离线，端口 9 必拒）
+    const hijack = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-tp-gc-hj-'))), 'gitconfig')
+    writeFileSync(hijack, '[http]\n\tproxy = http://127.0.0.1:9\n')
+    const clean = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-tp-gc-clean-'))), 'gitconfig')
+    writeFileSync(clean, '[user]\n\tname = gsm-test\n')
+    const { url, close } = await makeHttpOrigin('gsm-tp-gc2-')
+    try {
+      await withProxyEnvCleared(async () => {
+        const savedGlobal = process.env.GIT_CONFIG_GLOBAL
+        process.env.GIT_CONFIG_GLOBAL = hijack
+        try {
+          const dir = join(trackTmp(mkdtempSync(join(tmpdir(), 'gsm-tp-gc2-m-'))), 'm.git')
+          expect(await ensureMirror(url, dir, { gitConfigPath: clean })).toBe('cloned')
+        } finally {
+          if (savedGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL
+          else process.env.GIT_CONFIG_GLOBAL = savedGlobal
+        }
+      })
+    } finally { await close() }
+  })
+})
+
+// —— v1.5 Task 1：按仓指定 git 配置文件（GIT_CONFIG_GLOBAL 映射）——
+
+describe('transportOptsEnv（纯函数，v1.5 env 三分支）', () => {
+  it('bypassGitConfig → GIT_CONFIG_GLOBAL/SYSTEM 均 /dev/null；与 gitConfigPath 双设 → bypass 优先（defensive）', () => {
+    expect(transportOptsEnv({ bypassGitConfig: true })).toEqual({
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null'
+    })
+    // schema refine 已禁双设；mirror 层 defensive：bypass 优先
+    expect(transportOptsEnv({ bypassGitConfig: true, gitConfigPath: '/x/cfg' })).toEqual({
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null'
+    })
+  })
+
+  it('gitConfigPath → 仅 GIT_CONFIG_GLOBAL=<path>（GIT_CONFIG_SYSTEM 保留机器级配置）', () => {
+    expect(transportOptsEnv({ gitConfigPath: '/x/cfg' })).toEqual({ GIT_CONFIG_GLOBAL: '/x/cfg' })
+  })
+
+  it('均未设（含仅 httpProxy）→ 无 env 键（空对象，调用方按空判断不加 env 键）', () => {
+    expect(transportOptsEnv({})).toEqual({})
+    expect(transportOptsEnv({ httpProxy: 'http://p:1' })).toEqual({})
+    expect(transportOptsEnv({ bypassGitConfig: false, gitConfigPath: undefined })).toEqual({})
   })
 })
