@@ -184,3 +184,28 @@
 - reposapi describe 级 cleanupTracked 泄漏（v1.4 遗留，文件级收敛后待差集补）
 - POST 400/409 定序契约化；gitConfigPath 运行中被删的 git 报错呈现（lifecycle 文档化）
 - AI 文档"空 -c 对"措辞修正（Minor 5，随下次文档维护）
+
+---
+
+# v1.6 收官附录（2026-11-13，界面重构 Element Plus）
+
+## 已交付
+
+- Element Plus 按需引入（AutoImport/Components + ElementPlusResolver；js 480K 其中 ElMenu popper 链为主）+ html.dark 类驱动主题体系（localStorage 显式 > prefers 缺省 + 手动切换按钮持久化）+ el-container 布局骨架
+- 五视图全迁移：el-table（hidden-columns 双渲染陷阱→tbody 前缀定位收敛）/el-alert 四态/el-tag 徽标/el-form 校验/ElMessage 瞬时提示/el-popconfirm #actions 插槽/el-descriptions/el-collapse/el-select disabled 未配对禁选
+- 业务语义零回归（切仓守卫/三分支载荷/互斥联动/对象式 :to/复制/删除确认五视图逐一在场）；测试 45→48（业务断言保留 + Compare 冒烟 ×3 + 未配对禁选首锁）
+- EP 陷阱知识工程化：hidden-columns 哑上下文影子克隆、teleported 是 prop 不落 DOM attribute（防回归锚定渲染位置）、transition stub 内层断言——全部写进测试头注释
+- style.css 从 ~300 行精简至 45 行（死类 grep 零消费后删；暗色 input 双边框负债整删）
+
+## v1.7 池（v1.6 最终审查 carry）
+
+- isDark 系统跟随失同步（OS 翻转后首点固化旧主题，二次自愈）；applyTheme 降非导出；el-menu nav landmark
+- label→span 丢控件关联 ×12（aria-label 一行式/收敛）；badge() 双调用与 effect 默认/bannerText 残留名
+- Compare 双列串拼接经可达性分析不升级（server 白名单+深链失败双重不可达）——已顺手修+冒烟 ✅；折叠组件语言统一（el-collapse vs details）；error 态 ElMessage duration:0 兜底；selectedLabel 失败语义
+- teleported=false 弹层在 .el-main overflow:auto 内短视口底部边缘可能裁（目检项）；error-alert 无 margin 贴脸
+
+## 运维与流程备注
+
+- **重试固定流程已固化**：重启前 ps+lsof 核实端口归属与进程树全灭（v1.5 验收首_run 打到僵尸进程事故的落地）
+- **双重派发事故复盘**：T2 双代理并发单树（zz-*/EpProbe 双探针互报）→ 冻结双方+控制器独立验证门禁+合并态提交（a462dd0）；红线=同一任务单次 tool call 派发，dispatch 后未见响应先 list_agents 核对
+- brief 计数勘误机制：ledger 计数会滞后于实际（测试随周期增长），每任务以实测基线回归并声明
