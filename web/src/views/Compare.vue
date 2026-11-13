@@ -71,37 +71,58 @@ onMounted(async () => {
 <template>
   <section class="compare">
     <div class="pick">
-      <label>仓库 <select v-model="repoId" @change="onRepoChange"><option v-for="r in repos" :key="r.id" :value="r.id">{{ r.id }}</option></select></label>
-      <label>基准 <select v-model="base"><option v-for="n in names" :key="n" :value="n">{{ n }}</option></select></label>
-      <label>目标 <select v-model="target"><option v-for="n in names" :key="n" :value="n">{{ n }}</option></select></label>
+      <span>仓库</span>
+      <el-select class="select-repo" v-model="repoId" :teleported="false" @change="onRepoChange">
+        <el-option v-for="r in repos" :key="r.id" :label="r.id" :value="r.id" />
+      </el-select>
+      <span>基准</span>
+      <el-select class="select-base" v-model="base" :teleported="false">
+        <el-option v-for="n in names" :key="n" :label="n" :value="n" />
+      </el-select>
+      <span>目标</span>
+      <el-select class="select-target" v-model="target" :teleported="false">
+        <el-option v-for="n in names" :key="n" :label="n" :value="n" />
+      </el-select>
     </div>
-    <p v-if="error" class="banner banner-red">{{ error }}</p>
-    <p v-if="result" class="muted">
-      {{ base }} 领先 {{ target }} <strong>{{ result.ahead }}</strong> 个提交，
-      落后 <strong>{{ result.behind }}</strong> 个提交
-    </p>
+    <el-alert v-if="error" class="error-alert" type="error" :title="error" :closable="false" />
 
-    <div v-if="result" class="cols">
-      <div>
-        <h3>{{ base }} 独有（{{ result.aheadCommits.length }}）</h3>
-        <ul class="rows">
-          <li v-for="c in result.aheadCommits" :key="c.sha" class="row">
-            <RouterLink :to="`/commit/${c.sha}${repoId ? `?repo=${repoId}` : ''}`"><code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}</RouterLink>
-            <span class="muted"> {{ c.authorName }} · {{ formatRelative(c.committedAt) }}</span>
-          </li>
-          <li v-if="result.aheadCommits.length === 0" class="muted">（无）</li>
-        </ul>
-      </div>
-      <div>
-        <h3>{{ target }} 独有（{{ result.behindCommits.length }}）</h3>
-        <ul class="rows">
-          <li v-for="c in result.behindCommits" :key="c.sha" class="row">
-            <RouterLink :to="`/commit/${c.sha}${repoId ? `?repo=${repoId}` : ''}`"><code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}</RouterLink>
-            <span class="muted"> {{ c.authorName }} · {{ formatRelative(c.committedAt) }}</span>
-          </li>
-          <li v-if="result.behindCommits.length === 0" class="muted">（无）</li>
-        </ul>
-      </div>
-    </div>
+    <template v-if="result">
+      <!-- 方向统计：业务文案逐字保留，ahead/behind 数值以 el-tag（success/warning）承载 -->
+      <p class="muted dir-line">
+        {{ base }} 领先 {{ target }}
+        <el-tag type="success" size="small">{{ result.ahead }}</el-tag> 个提交，落后
+        <el-tag type="warning" size="small">{{ result.behind }}</el-tag> 个提交
+      </p>
+
+      <el-row :gutter="16">
+        <el-col :span="12">
+          <h3>{{ base }} 独有（{{ result.aheadCommits.length }}）</h3>
+          <ul class="rows">
+            <li v-for="c in result.aheadCommits" :key="c.sha" class="row">
+              <RouterLink :to="`/commit/${c.sha}${repoId ? `?repo=${repoId}` : ''}`"><code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}</RouterLink>
+              <span class="muted"> {{ c.authorName }} · {{ formatRelative(c.committedAt) }}</span>
+            </li>
+            <li v-if="result.aheadCommits.length === 0" class="muted">（无）</li>
+          </ul>
+        </el-col>
+        <el-col :span="12">
+          <h3>{{ target }} 独有（{{ result.behindCommits.length }}）</h3>
+          <ul class="rows">
+            <li v-for="c in result.behindCommits" :key="c.sha" class="row">
+              <RouterLink :to="`/commit/${c.sha}${repoId ? `?repo=${repoId}` : ''}`"><code>{{ c.sha.slice(0, 10) }}</code> {{ c.subject }}</RouterLink>
+              <span class="muted"> {{ c.authorName }} · {{ formatRelative(c.committedAt) }}</span>
+            </li>
+            <li v-if="result.behindCommits.length === 0" class="muted">（无）</li>
+          </ul>
+        </el-col>
+      </el-row>
+    </template>
   </section>
 </template>
+
+<style scoped>
+/* 布局就近提供（Repos 先例）：控件视觉交由 EP 组件与 html.dark 变量体系 */
+.pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.pick .el-select { width: 180px; }
+.dir-line { margin-top: 0; }
+</style>

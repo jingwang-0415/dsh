@@ -2,8 +2,10 @@
    - 删除 .nav 手写导航（被 el-menu 取代，App.vue 重写）。
    - 暗色块由 @media (prefers-color-scheme: dark) 改为 html.dark 类驱动，
      与手动主题切换（localStorage('theme')）统一；缺省跟随系统由 main.ts 初始化落实。
-   - .banner / .tbl / .badge / .rows / .row-* / .dot / .btn / .pick / .cols / .commit-body / .muted
-     仍被未迁移的视图（T2/T3）引用，grep 核对后保留；视图重写后逐步删除，由 EP 变量接管。 */
+   - v1.6 Task 3（三视图迁移收官）：.banner*/.badge*/.tbl/.btn/.dot*/.row-miss/.row-ok/
+     .cols/.pick select 随 CommitDetail/CrossRepo/Compare 迁 EP（el-alert/el-tag/el-select/
+     el-button/el-row）后 grep 零消费，全部删除；.rows/.row/.row-other/.muted/.commit-body/
+     .pick 仍被 Overview 与三视图列表消费，保留。 */
 :root { color-scheme: light; }
 html.dark { color-scheme: dark; }
 * { box-sizing: border-box; }
@@ -22,87 +24,30 @@ h2, h3 { margin: 12px 0 8px; }
 code { background: #eff1f3; padding: 1px 5px; border-radius: 4px; }
 a { color: #0969da; text-decoration: none; }
 
-.banner { padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; font-size: 14px; }
-.banner-green { background: #dafbe1; color: #116329; }
-.banner-yellow { background: #fff8c5; color: #7d4e00; }
-.banner-red { background: #ffebe9; color: #cf222e; }
-.banner-gray { background: #eaeef2; color: #57606a; }
-
-.tbl { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; }
-.tbl th, .tbl td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #d0d7de; font-size: 14px; }
-.tbl th { background: #f6f8fa; }
-
-.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; border: none; cursor: default; }
-button.badge { cursor: pointer; }
-.badge-red { background: #ffebe9; color: #cf222e; }
-.badge-green { background: #dafbe1; color: #116329; }
-.badge-yellow { background: #fff8c5; color: #7d4e00; }
-.badge-gray { background: #eaeef2; color: #57606a; }
-.badge-blue { background: #ddf4ff; color: #0969da; }
-
 .rows { list-style: none; padding: 0; margin: 0; }
 .row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px; margin-bottom: 4px; background: #fff; font-size: 14px; }
-.row-miss { background: #ffebe9; color: #cf222e; font-weight: 600; }
-.row-ok { background: #dafbe1; color: #116329; }
 .row-other { background: #eaeef2; color: #57606a; }
-.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.dot-red { background: #cf222e; }
-.dot-green { background: #1a7f37; }
-.dot-gray { background: #8c959f; }
-
-.btn { border: 1px solid #d0d7de; background: #f6f8fa; border-radius: 6px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
-.btn:hover { background: #eaeef2; }
 
 .commit-body { background: #fff; padding: 10px; border-radius: 6px; white-space: pre-wrap; font-size: 13px; }
 .pick { display: flex; gap: 16px; margin-bottom: 12px; }
-.pick select { padding: 4px 8px; border-radius: 6px; }
-.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 
-/* ===== 暗色（html.dark 类驱动；视图迁移完成后逐步收敛为 EP 变量） ===== */
+/* ===== 暗色（html.dark 类驱动；交互控件视觉交由 EP 变量与 html.dark 块） ===== */
 html.dark body { background: #0d1117; color: #e6edf3; }
-html.dark .tbl, html.dark .row, html.dark .commit-body, html.dark .rows .row { background: #161b22; border-color: #30363d; }
-html.dark .tbl th { background: #161b22; }
-html.dark .tbl th, html.dark .tbl td { border-color: #30363d; }
+html.dark .row, html.dark .commit-body, html.dark .rows .row { background: #161b22; border-color: #30363d; }
 html.dark .muted { color: #8b949e; }
 html.dark code { background: #21262d; }
 
-/* 交互控件显式配色：修复“浅底继承浅字”不可读（v1.3.2 Task 3） */
-html.dark .btn { background: #21262d; color: #e6edf3; border-color: #30363d; }
-html.dark .btn:hover { background: #30363d; }
-
-/* 表单控件：显式深色底/字/边框，避免 UA 行为不一致。
-   带 .app/.repos 前缀的三条用更高特异性压过 Repos.vue / CrossRepo.vue
-   scoped 的浅色边框（border: #d0d7de）；
-   :not([type="checkbox"]) 排除 UA 自绘的复选框。 */
-html.dark .pick select, html.dark textarea, html.dark input:not([type="checkbox"]),
-html.dark .app .pick input:not([type="checkbox"]),
-html.dark .repos .add-form input:not([type="checkbox"]),
-html.dark .repos .tbl input:not([type="checkbox"]) {
+/* 表单控件：显式深色底/字/边框（el-input/el-select 内层原生 input 亦命中，兜底一致观感）。
+   原 .app .pick/.repos .add-form/.repos .tbl 高特异性变体专为压过 scoped 浅色边框，
+   scoped 规则已随 EP 迁移消亡，收敛为通用规则即可 */
+html.dark textarea, html.dark input:not([type="checkbox"]) {
   background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
 }
-html.dark .pick select:focus, html.dark textarea:focus, html.dark input:not([type="checkbox"]):focus,
-html.dark .app .pick input:not([type="checkbox"]):focus,
-html.dark .repos .add-form input:not([type="checkbox"]):focus,
-html.dark .repos .tbl input:not([type="checkbox"]):focus { border-color: #58a6ff; }
+html.dark textarea:focus, html.dark input:not([type="checkbox"]):focus { border-color: #58a6ff; }
 
 /* 链接与错误文字：#0969da/#cf222e 在深底上仅 3.3–3.7:1，提亮至 GitHub 暗色系 */
 html.dark a { color: #58a6ff; }
 html.dark .muted.err { color: #f85149; }
 
-/* badge/banner：浅色粉彩底在暗色下刺眼，换半透明色底 + 提亮前景（对比 ≥4.5:1） */
-html.dark .badge-red, html.dark .banner-red { background: rgba(248, 81, 73, 0.15); color: #f85149; }
-html.dark .badge-green, html.dark .banner-green { background: rgba(63, 185, 80, 0.15); color: #56d364; }
-html.dark .badge-yellow, html.dark .banner-yellow { background: rgba(187, 128, 9, 0.25); color: #d29922; }
-html.dark .badge-gray, html.dark .banner-gray { background: rgba(139, 148, 158, 0.15); color: #8b949e; }
-html.dark .badge-blue { background: rgba(88, 166, 255, 0.15); color: #58a6ff; }
-
-/* 行状态色：暗色块已有 .rows .row 覆盖浅底，此处补齐文字/色底 */
-html.dark .rows li.row-miss { background: rgba(248, 81, 73, 0.15); color: #f85149; }
-html.dark .rows li.row-ok { background: rgba(63, 185, 80, 0.15); color: #56d364; }
+/* 行状态色余量（.row-miss/.row-ok 已随 CommitDetail 迁 el-tag 消亡）：Overview 已删除分区在用 */
 html.dark .rows li.row-other { background: rgba(139, 148, 158, 0.15); color: #8b949e; }
-html.dark .dot-red { background: #f85149; }
-html.dark .dot-green { background: #3fb950; }
-html.dark .dot-gray { background: #8b949e; }
-
-/* Repos.vue scoped .url-cell(#656d76) 在暗色表格上仅 3.3:1，用更高特异性提亮 */
-html.dark .repos .tbl .url-cell { color: #8b949e; }

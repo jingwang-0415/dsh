@@ -1,7 +1,17 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import type { VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import CrossRepo from '../src/views/CrossRepo.vue'
+
+// v1.6-T3 Element Plus 迁移：DOM 定位适配 EP 结构（四枚 el-select / el-input 路径过滤 /
+// el-alert 错误横幅 / el-row·el-col 统计与双列），业务断言逐字保留（对比请求 URL 与路径过滤 /
+// 未配对禁选 / 对象式 :to href 精确编码 / 切仓派生分支与空参形态消除）。
+// EP 陷阱复用 T2 探针结论（勿再踩坑）：
+// - VTU 默认 stub transition 会吞 el-alert/el-tag 根节点 → mount 统一 stubs.transition=false
+// - 四枚下拉均不在表格 cell 内 → :teleported="false"（弹层随组件渲染，可作用域查询；
+//   未展开亦可直接点击选项完成选择——Repos/Overview 同款探针结论）
+// - 原生 <select>.setValue 定位迁 pickOption（作用域 .el-select-dropdown__item 文本点击）
 
 const reposPayload = [
   { id: 'gh', url: 'https://github.com/x/dsh', defaultBranch: 'main', pollIntervalSeconds: 10 },
@@ -38,16 +48,50 @@ function routeTo(_query: string): ReturnType<typeof vi.fn> {
 
 async function mountView(query: string) {
   const fetchMock = await routeTo(query)
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/crossrepo', component: CrossRepo }] })
+  // /commit/:sha 以空壳注册：onlyIn 行 RouterLink 解析 href 需要目标路由在场，
+  // 否则 vue-router 每次渲染都刷 "No match found" stderr 噪音（Overview.test.ts 同款 stub 路由模式）
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/crossrepo', component: CrossRepo },
+      { path: '/commit/:sha', component: { template: '<div />' } }
+    ]
+  })
   await router.push(`/crossrepo${query}`)
   await router.isReady()
-  const wrapper = mount(CrossRepo, { global: { plugins: [router] } })
+  const wrapper: VueWrapper = mount(CrossRepo, { global: { plugins: [router], stubs: { transition: false } } })
   await flushPromises()
   return { wrapper, fetchMock, router }
 }
 
+// el-select 选项点击：下拉 teleported=false → 选项渲染在组件根内按 select 类作用域查询
+// （探针：未展开亦可直接点击完成选择并触发 change；Repos.test.ts pickOption 同款两段式，
+// 保留 document 弹层回退以定位走错路径时给出说明性报错）
+async function pickOption(wrapper: VueWrapper, sel: string, label: string): Promise<void> {
+  const scopedItem = wrapper
+    .findAll(`${sel} .el-select-dropdown__item`)
+    .find(i => i.text() === label)
+  if (scopedItem) {
+    await scopedItem.trigger('click')
+    await flushPromises()
+    return
+  }
+  const item = Array.from(document.querySelectorAll<HTMLElement>('.el-select__popper .el-select-dropdown__item'))
+    .find(i => i.textContent?.trim() === label)
+  expect(item, `下拉选项「${label}」应存在于 ${sel}（作用域或 body 弹层）`).not.toBeNull()
+  item!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  await flushPromises()
+}
+
+// 当前选中项文案（teleported=false 下拉静态渲染 is-selected，Repos.test.ts 同款探针结论）
+const selectedLabel = (wrapper: VueWrapper, sel: string): string =>
+  wrapper.find(`${sel} .el-select-dropdown__item.is-selected`).text()
+
 describe('CrossRepo 视图', () => {
-  beforeEach(() => { vi.unstubAllGlobals() })
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    document.querySelectorAll('.el-popper').forEach(n => n.remove())   // 弹层不跨用例串扰
+  })
 
   it('matched 灰色并排展示 shaA↔shaB，单向独有分区正确', async () => {
     const { wrapper } = await mountView('')
@@ -82,11 +126,22 @@ describe('CrossRepo 视图', () => {
     expect(links[1].attributes('href')).toBe(`/commit/${'b'.repeat(40)}?repo=gte`)     // onlyInB 行带 repoB 归属
   })
 
+  it('未配对分支在下拉中标注（未配对）且 el-option disabled 禁选；配对侧可选', async () => {
+    const { wrapper } = await mountView('?repoA=gh&repoB=gte&branchA=main&branchB=main')
+    // A 侧：feat 不在 B 分支列表 → 标注（未配对）且禁选；main 配对可选
+    const itemsA = wrapper.findAll('.select-branch-a .el-select-dropdown__item')
+    expect(itemsA.map(i => i.text())).toEqual(['main', 'feat（未配对）'])
+    const feat = itemsA.find(i => i.text() === 'feat（未配对）')!
+    expect(feat.classes()).toContain('is-disabled')
+    expect(itemsA.find(i => i.text() === 'main')!.classes()).not.toContain('is-disabled')
+    // B 侧：全部配对 → 无未配对项
+    expect(wrapper.findAll('.select-branch-b .el-select-dropdown__item').map(i => i.text())).toEqual(['main'])
+  })
+
   it('切仓后 URL 回写新默认分支（paired[0]），消除 branchA=&branchB= 空参形态', async () => {
     const { wrapper, router } = await mountView('?repoA=gh&repoB=gte&branchA=feat&branchB=main')
-    const selects = wrapper.findAll('select')
-    expect(selects[0].element.value).toBe('gh')
-    await selects[0].setValue('gte')   // 切仓 A → onRepoChange
+    expect(selectedLabel(wrapper, '.select-repo-a')).toBe('gh')
+    await pickOption(wrapper, '.select-repo-a', 'gte')   // 切仓 A → onRepoChange
     await flushPromises()
     expect(router.currentRoute.value.query.branchA).toBe('main')
     expect(router.currentRoute.value.query.branchB).toBe('main')
@@ -103,14 +158,22 @@ describe('CrossRepo 视图', () => {
       }
     }))
     vi.stubGlobal('fetch', fetchMock)
-    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/crossrepo', component: CrossRepo }] })
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/crossrepo', component: CrossRepo },
+        { path: '/commit/:sha', component: { template: '<div />' } }
+      ]
+    })
     await router.push('/crossrepo?repoA=gh&repoB=gte&branchA=feat&branchB=main')
     await router.isReady()
-    const wrapper = mount(CrossRepo, { global: { plugins: [router] } })
+    const wrapper: VueWrapper = mount(CrossRepo, { global: { plugins: [router], stubs: { transition: false } } })
     await flushPromises()
-    await wrapper.findAll('select')[0].setValue('gte')   // 切仓 A，branches 派生失败
+    await pickOption(wrapper, '.select-repo-a', 'gte')   // 切仓 A，branches 派生失败
     await flushPromises()
-    expect(wrapper.find('.banner-red').exists()).toBe(true)   // 失败路径真实发生
+    const banner = wrapper.find('.el-alert--error')
+    expect(banner.exists()).toBe(true)   // 失败路径真实发生（el-alert error 横幅）
+    expect(banner.text()).not.toBe('')
     expect(router.currentRoute.value.fullPath).not.toContain('branchA=')
     expect(router.currentRoute.value.fullPath).not.toContain('branchB=')
   })

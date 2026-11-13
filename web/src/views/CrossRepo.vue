@@ -105,26 +105,53 @@ onMounted(async () => {
 <template>
   <section class="crossrepo">
     <div class="pick">
-      <label>仓库 A <select v-model="repoA" @change="onRepoChange"><option v-for="r in repos" :key="r.id" :value="r.id">{{ r.id }}</option></select></label>
-      <label>仓库 B <select v-model="repoB" @change="onRepoChange"><option v-for="r in repos" :key="r.id" :value="r.id">{{ r.id }}</option></select></label>
-      <label>分支 A <select v-model="branchA" @change="onCompare"><option v-for="o in options('A')" :key="o.name" :value="o.name" :disabled="o.unpaired">{{ o.name }}{{ o.unpaired ? '（未配对）' : '' }}</option></select></label>
-      <label>分支 B <select v-model="branchB" @change="onCompare"><option v-for="o in options('B')" :key="o.name" :value="o.name" :disabled="o.unpaired">{{ o.name }}{{ o.unpaired ? '（未配对）' : '' }}</option></select></label>
-      <label>仅对比 <input v-model="includeGlob" placeholder="src/**,docs/**" /></label>
-      <label>排除 <input v-model="excludeGlob" placeholder="vendor/**" /></label>
-      <button class="btn" @click="onCompare">对比</button>
+      <span>仓库 A</span>
+      <!-- 四枚下拉均不在表格 cell 内 → teleported=false（弹层随布局渲染，可作用域查询） -->
+      <el-select class="select-repo-a" v-model="repoA" :teleported="false" @change="onRepoChange">
+        <el-option v-for="r in repos" :key="r.id" :label="r.id" :value="r.id" />
+      </el-select>
+      <span>仓库 B</span>
+      <el-select class="select-repo-b" v-model="repoB" :teleported="false" @change="onRepoChange">
+        <el-option v-for="r in repos" :key="r.id" :label="r.id" :value="r.id" />
+      </el-select>
+      <span>分支 A</span>
+      <el-select class="select-branch-a" v-model="branchA" :teleported="false" @change="onCompare">
+        <!-- 未配对禁选：el-option disabled + 文案标注（语义与原 disabled option 逐字一致） -->
+        <el-option
+          v-for="o in options('A')" :key="o.name"
+          :label="o.name + (o.unpaired ? '（未配对）' : '')" :value="o.name" :disabled="o.unpaired"
+        />
+      </el-select>
+      <span>分支 B</span>
+      <el-select class="select-branch-b" v-model="branchB" :teleported="false" @change="onCompare">
+        <el-option
+          v-for="o in options('B')" :key="o.name"
+          :label="o.name + (o.unpaired ? '（未配对）' : '')" :value="o.name" :disabled="o.unpaired"
+        />
+      </el-select>
+      <span>仅对比</span>
+      <el-input v-model="includeGlob" class="filter-include" placeholder="src/**,docs/**" />
+      <span>排除</span>
+      <el-input v-model="excludeGlob" class="filter-exclude" placeholder="vendor/**" />
+      <el-button type="primary" @click="onCompare">对比</el-button>
     </div>
 
-    <p v-if="error" class="banner banner-red">{{ error }}</p>
+    <el-alert v-if="error" class="error-alert" type="error" :title="error" :closable="false" />
 
     <template v-if="result">
-      <p class="muted">
-        A 共 {{ result.stats.aTotal }} · B 共 {{ result.stats.bTotal }} ·
-        同补丁 {{ result.stats.matched }} ·
-        {{ result.branchPair.repoA }} 独有 {{ result.stats.onlyA }} ·
-        {{ result.branchPair.repoB }} 独有 {{ result.stats.onlyB }}
-        <template v-if="result.unpairedBranches.repoA.length || result.unpairedBranches.repoB.length">
-          · 未配对分支：{{ [...result.unpairedBranches.repoA, ...result.unpairedBranches.repoB].join('、') }}
-        </template>
+      <!-- 统计行：简化 el-row/el-col（映射指引二选一，取轻量版，数值语义逐键保留） -->
+      <el-row class="stats-row" :gutter="8">
+        <el-col :span="4"><span class="muted">A 共</span> {{ result.stats.aTotal }}</el-col>
+        <el-col :span="4"><span class="muted">B 共</span> {{ result.stats.bTotal }}</el-col>
+        <el-col :span="4"><span class="muted">同补丁</span> {{ result.stats.matched }}</el-col>
+        <el-col :span="6"><span class="muted">{{ result.branchPair.repoA }} 独有</span> {{ result.stats.onlyA }}</el-col>
+        <el-col :span="6"><span class="muted">{{ result.branchPair.repoB }} 独有</span> {{ result.stats.onlyB }}</el-col>
+      </el-row>
+      <p
+        v-if="result.unpairedBranches.repoA.length || result.unpairedBranches.repoB.length"
+        class="muted"
+      >
+        未配对分支：{{ [...result.unpairedBranches.repoA, ...result.unpairedBranches.repoB].join('、') }}
       </p>
 
       <h3>源码一致（同补丁）（{{ result.matchedPairs.length }}）</h3>
@@ -136,8 +163,8 @@ onMounted(async () => {
         <li v-if="result.matchedPairs.length === 0" class="muted">（无 —— 全部为单向独有改动）</li>
       </ul>
 
-      <div class="cols">
-        <div>
+      <el-row :gutter="16">
+        <el-col :span="12">
           <h3>{{ result.branchPair.repoA }} 独有（{{ result.onlyInA.length }}）</h3>
           <ul class="rows">
             <li v-for="c in result.onlyInA" :key="c.sha" class="row">
@@ -148,8 +175,8 @@ onMounted(async () => {
             </li>
             <li v-if="result.onlyInA.length === 0" class="muted">（无）</li>
           </ul>
-        </div>
-        <div>
+        </el-col>
+        <el-col :span="12">
           <h3>{{ result.branchPair.repoB }} 独有（{{ result.onlyInB.length }}）</h3>
           <ul class="rows">
             <li v-for="c in result.onlyInB" :key="c.sha" class="row">
@@ -158,17 +185,19 @@ onMounted(async () => {
             </li>
             <li v-if="result.onlyInB.length === 0" class="muted">（无）</li>
           </ul>
-        </div>
-      </div>
+        </el-col>
+      </el-row>
     </template>
   </section>
 </template>
 
 <style scoped>
-/* style.css 不在本任务修改清单内：matched 灰色样式以 scoped 规则就近提供 */
+/* 布局就近提供（Repos 先例）：控件视觉交由 EP 组件与 html.dark 变量体系；matched 灰色
+   保留语义就近提供，暗色分支随 T1 主题体系由 @media 改 html.dark 类驱动 */
+.pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.pick .el-select { width: 170px; }
+.pick .filter-include, .pick .filter-exclude { width: 200px; }
+.stats-row { margin-bottom: 8px; align-items: baseline; }
 .row-matched { background: #eaeef2; color: #57606a; }
-@media (prefers-color-scheme: dark) {
-  .row-matched { background: #21262d; color: #8b949e; }
-}
-.pick input { padding: 4px 8px; border-radius: 6px; border: 1px solid #d0d7de; }
+html.dark .row-matched { background: #21262d; color: #8b949e; }
 </style>
