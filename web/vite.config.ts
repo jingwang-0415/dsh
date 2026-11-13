@@ -14,5 +14,11 @@ export default defineConfig({
     Components({ resolvers: [ElementPlusResolver()], dts: 'src/components.d.ts' })
   ],
   server: { port: 5173, proxy: { '/api': 'http://127.0.0.1:43900' } },
-  test: { environment: 'jsdom', include: ['test/**/*.test.ts'] }
+  test: {
+    environment: 'jsdom',
+    include: ['test/**/*.test.ts'],
+    // ElementPlusResolver 注入的样式 import 落在 node_modules 内（默认 externalize），
+    // Node ESM 加载不了 .css → 测试环境 inline element-plus，让 vite 管线接管其 css（仅测试生效）
+    server: { deps: { inline: ['element-plus'] } }
+  }
 })
