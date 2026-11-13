@@ -1,7 +1,20 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import type { DOMWrapper, VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Repos from '../src/views/Repos.vue'
+
+// v1.6-T2 Element Plus 迁移：DOM 定位适配 EP 结构（el-form/el-input/el-select/el-checkbox/
+// el-table/el-popconfirm/el-tag/el-alert），业务断言逐字保留（POST/PATCH 载荷键值/URL/
+// 状态分支/三分支语义/互斥联动）。探针实证（zz-probe，临时文件不提交）：
+// - VTU 默认 stub transition 会吞掉 el-tag 根节点 → mount 统一 stubs.transition=false
+// - el-table mounted 依赖 ResizeObserver（jsdom 无）→ mountView 内 stubGlobal
+// - el-select teleported=false（添加表单 select，无 overflow 容器）→ 选项渲染在组件根内可作用域
+//   查询，未展开亦可直接点击选项完成选择；行内编辑下拉（表格 cell 内）v1.6-T2fix 起移除
+//   teleported=false、走 EP 默认 teleport 到 document.body（cell overflow:hidden 会裁剪 cell 内
+//   弹层，防回归锚见「防回归锚」用例）→ 选项定位走 document 查询（openPopconfirm 同款模式）
+// - el-popconfirm：默认 teleport 到 document.body，必须显式 confirm/cancel-button-text（默认 Yes/No）
+// - el-input/el-checkbox：class 落 wrapper，原生 input 用 `.class input` 定位（setValue/checked/disabled）
 
 const reposPayload = [
   { id: 'r1', url: 'https://github.com/x/r1', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30 }
@@ -45,19 +58,87 @@ function stubFetch(opts: FetchOpts = {}) {
 const methodOf = (call: unknown[]): string => String((call[1] as RequestInit | undefined)?.method ?? 'GET')
 const urlOf = (call: unknown[]): string => String(call[0])
 
+const RO_STUB = class { observe(): void {} unobserve(): void {} disconnect(): void {} }
+
 async function mountView(opts: FetchOpts = {}) {
   const fetchMock = stubFetch(opts)
   vi.stubGlobal('fetch', fetchMock)
+  vi.stubGlobal('ResizeObserver', RO_STUB)
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/repos', component: Repos }] })
   await router.push('/repos')
   await router.isReady()
-  const wrapper = mount(Repos, { global: { plugins: [router] } })
+  const wrapper = mount(Repos, { global: { plugins: [router], stubs: { transition: false } } })
   await flushPromises()
   return { wrapper, fetchMock }
 }
 
-describe('Repos 视图（仓库管理）', () => {
-  beforeEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+// el-select 选项点击：优先组件内作用域查询（添加表单 select teleported=false，预渲染在根内），
+// 未命中回退 document.body（行内编辑下拉默认 teleport——见「防回归锚」用例；VTU wrapper 外，
+// 与 openPopconfirm 的 document 查询同模式）。探针：未展开亦可直接点击选项完成选择
+async function pickOption(wrapper: VueWrapper, sel: string, label: string): Promise<void> {
+  const scopedItem = wrapper
+    .findAll(`${sel} .el-select-dropdown__item`)
+    .find(i => i.text() === label)
+  if (scopedItem) {
+    await scopedItem.trigger('click')
+    await flushPromises()
+    return
+  }
+  // teleport 路径：选项在 body 的 .el-select__popper（本页仅行内编辑下拉走此路径，无歧义）
+  const item = Array.from(document.querySelectorAll<HTMLElement>('.el-select__popper .el-select-dropdown__item'))
+    .find(i => i.textContent?.trim() === label)
+  expect(item, `下拉选项「${label}」应存在于 body 弹层（${sel}）`).not.toBeNull()
+  item!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  await flushPromises()
+}
+
+// 行内编辑下拉当前选中项文案（teleport 后选项在 body 弹层，选中态由 is-selected 标记）
+const editProxySelectedLabel = (): string =>
+  Array.from(document.querySelectorAll<HTMLElement>('.el-select__popper .el-select-dropdown__item'))
+    .find(i => i.classList.contains('is-selected'))?.textContent?.trim() ?? ''
+
+// 表格内按钮一律收敛到 tbody 定位（探针实证：el-table-column 会在 .hidden-columns 以哑上下文
+// { row: {} } 额外渲染一次列默认插槽——影子克隆里的按钮不带真实行数据，全文查找必须避开）
+const cellButton = (wrapper: VueWrapper, text: string): DOMWrapper<Element> | undefined =>
+  wrapper.findAll('tbody tr button').find(b => b.text() === text)
+
+// 轮询查询 helper（v1.6-T2fix；@vue/test-utils 2.4.4 无 waitFor 导出，按任务约定的轮询断言
+// helper 收敛）：每 10ms 查一次直到非空或超时（超时抛说明性错误）——替代探针遗留的固定
+// setTimeout 宏任务间隙（原 10ms hack 依赖时序猜测，慢 CI 上是 flake 面），不猜时序不 flake
+async function waitForNode<T extends Element>(get: () => T | null, what: string, timeoutMs = 2000): Promise<T> {
+  const step = 10
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const el = get()
+    if (el) return el
+    if (Date.now() >= deadline) throw new Error(`waitFor 超时（${timeoutMs}ms）：${what}`)
+    await new Promise(r => setTimeout(r, step))
+  }
+}
+
+// el-popconfirm（默认 teleport 到 body）：点开引用按钮 → 返回 popper 元素（popper 挂载走轮询）
+async function openPopconfirm(wrapper: VueWrapper, btnText: string): Promise<HTMLElement> {
+  const btn = wrapper.findAll('tbody tr button').find(b => b.text() === btnText)
+  expect(btn, `按钮「${btnText}」应存在`).toBeDefined()
+  await btn!.trigger('click')
+  await flushPromises()
+  return waitForNode(() => document.querySelector<HTMLElement>('.el-popper.el-popover'), 'popconfirm 弹层应渲染')
+}
+
+const popAction = (pop: HTMLElement, label: string): HTMLElement => {
+  const btn = Array.from(pop.querySelectorAll<HTMLElement>('.el-popconfirm__action button'))
+    .find(b => b.textContent?.trim() === label)
+  expect(btn, `popconfirm 按钮「${label}」应存在`).toBeDefined()
+  return btn!
+}
+
+describe('Repos 视图（仓库管理，EP 迁移适配）', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    document.querySelectorAll('.el-popper').forEach(n => n.remove())   // popper 不跨用例串扰
+    document.querySelectorAll('.el-message').forEach(n => n.remove())
+  })
 
   it('添加表单提交 POST 载荷（可选项留空则不带）并刷新列表', async () => {
     const { wrapper, fetchMock } = await mountView()
@@ -81,21 +162,28 @@ describe('Repos 视图（仓库管理）', () => {
     expect(calls.slice(i + 1).some(c => urlOf(c) === '/api/repos')).toBe(true)
   })
 
-  it('删除按钮经 confirm 后发 DELETE /api/repos/:id 并刷新；行内展示调度状态徽标', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  it('删除按钮经 popconfirm 确认后发 DELETE /api/repos/:id 并刷新；行内展示调度状态徽标；取消不发请求', async () => {
     const { wrapper, fetchMock } = await mountView()
-    // 状态徽标来自 GET /api/status?repo=r1（state=running → 监听中）
+    // 状态徽标来自 GET /api/status?repo=r1（state=running → 监听中，el-tag 渲染）
     expect(wrapper.text()).toContain('监听中')
 
-    const del = wrapper.findAll('button').find(b => b.text().includes('删除'))!
-    await del.trigger('click')
+    // 取消分支：popconfirm 文案（替代 window.confirm 断言）→ 取消 → 无 DELETE
+    const pop1 = await openPopconfirm(wrapper, '删除')
+    expect(pop1.textContent).toContain('确定停止监控并移除该仓库？历史数据将保留')
+    popAction(pop1, '取消').dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
-    expect(confirmSpy).toHaveBeenCalledWith('确定停止监控并移除该仓库？历史数据将保留')
+    expect(fetchMock.mock.calls.some(c => methodOf(c) === 'DELETE')).toBe(false)
+
+    // 确认分支：DELETE /api/repos/r1 + 刷新列表
+    const pop2 = await openPopconfirm(wrapper, '删除')
+    popAction(pop2, '确定').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
     const calls = fetchMock.mock.calls
     const i = calls.findIndex(c => methodOf(c) === 'DELETE')
     expect(i).toBeGreaterThan(-1)
     expect(urlOf(calls[i])).toBe('/api/repos/r1')
     expect(calls.slice(i + 1).some(c => urlOf(c) === '/api/repos')).toBe(true)
+    wrapper.unmount()   // teleport popper 随卸载清理
   })
 
   it('POST 409 → 错误横幅显示服务端冲突文案', async () => {
@@ -105,7 +193,7 @@ describe('Repos 视图（仓库管理）', () => {
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
-    const banner = wrapper.find('.banner-red')
+    const banner = wrapper.find('.el-alert--error')
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain('repo_exists')
   })
@@ -122,43 +210,43 @@ describe('Repos 视图（仓库管理）', () => {
     await id().setValue('../evil')
     await url().setValue('https://example.com/x.git')
     await add()
-    expect(wrapper.find('.banner-red').text()).toContain('id 仅允许字母数字与 . _ -')
+    expect(wrapper.find('.el-alert--error').text()).toContain('id 仅允许字母数字与 . _ -')
 
     // 审查 C1：'..'/'.' 过白名单正则，但服务端 mirrorDir 会逃逸 → 前端同款先行拦截
     await id().setValue('..')
     await add()
-    expect(wrapper.find('.banner-red').text()).toContain('id 不能为')
+    expect(wrapper.find('.el-alert--error').text()).toContain('id 不能为')
 
     await id().setValue('beta')
     await url().setValue('')
     await add()
-    expect(wrapper.find('.banner-red').text()).toContain('url 不能为空')
+    expect(wrapper.find('.el-alert--error').text()).toContain('url 不能为空')
 
     expect(fetchMock.mock.calls.some(c => methodOf(c) === 'POST')).toBe(false)
   })
 
   it('编辑按钮进入行内编辑态：url 只读无输入框带提示；保存发 PATCH 三键载荷并刷新', async () => {
     const { wrapper, fetchMock } = await mountView()
-    const editBtn = wrapper.findAll('button').find(b => b.text() === '编辑')
-    expect(editBtn).toBeDefined()   // RED：行内无编辑按钮
+    const editBtn = cellButton(wrapper, '编辑')
+    expect(editBtn).toBeDefined()
     await editBtn!.trigger('click')
 
     // 编辑控件出现；url 保持只读文本（编辑态不加输入框）并带不可修改 title 提示
-    expect(wrapper.find('.edit-branch').exists()).toBe(true)
-    expect(wrapper.find('.edit-interval').exists()).toBe(true)
-    expect(wrapper.find('.edit-exclude').exists()).toBe(true)
+    expect(wrapper.find('tbody .edit-branch').exists()).toBe(true)
+    expect(wrapper.find('tbody .edit-interval').exists()).toBe(true)
+    expect(wrapper.find('tbody .edit-exclude').exists()).toBe(true)
     const urlCell = wrapper.find('td.url-cell')
     expect(urlCell.find('input').exists()).toBe(false)
-    expect(urlCell.attributes('title')).toContain('url 不可修改')
+    expect(urlCell.find('span').attributes('title')).toContain('url 不可修改')
 
     // 预填为当前行值
-    expect((wrapper.find('.edit-branch').element as HTMLInputElement).value).toBe('main')
-    expect((wrapper.find('.edit-interval').element as HTMLInputElement).value).toBe('30')
+    expect((wrapper.find('tbody .edit-branch input').element as HTMLInputElement).value).toBe('main')
+    expect((wrapper.find('tbody .edit-interval input').element as HTMLInputElement).value).toBe('30')
 
-    await wrapper.find('.edit-branch').setValue('develop')
-    await wrapper.find('.edit-interval').setValue('7')
-    await wrapper.find('.edit-exclude').setValue('tmp/**, dist/**')
-    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await wrapper.find('tbody .edit-branch input').setValue('develop')
+    await wrapper.find('tbody .edit-interval input').setValue('7')
+    await wrapper.find('tbody .edit-exclude input').setValue('tmp/**, dist/**')
+    await cellButton(wrapper, '保存')!.trigger('click')
     await flushPromises()
 
     const calls = fetchMock.mock.calls
@@ -175,7 +263,7 @@ describe('Repos 视图（仓库管理）', () => {
       bypassGitConfig: false, httpProxy: null, gitConfigPath: null
     })
     // 保存成功 → 退出编辑态 + 刷新列表（PATCH 之后再次 GET /api/repos）
-    expect(wrapper.find('.edit-branch').exists()).toBe(false)
+    expect(wrapper.find('tbody .edit-branch').exists()).toBe(false)
     expect(calls.slice(i + 1).some(c => urlOf(c) === '/api/repos')).toBe(true)
   })
 
@@ -183,66 +271,66 @@ describe('Repos 视图（仓库管理）', () => {
     const { wrapper, fetchMock } = await mountView({
       patchResult: { ok: false, json: { code: 'invalid', message: 'pollIntervalSeconds: 需为 ≥5 的整数' } }
     })
-    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
-    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await cellButton(wrapper, '编辑')!.trigger('click')
+    await cellButton(wrapper, '保存')!.trigger('click')
     await flushPromises()
 
-    const banner = wrapper.find('.banner-red')
+    const banner = wrapper.find('.el-alert--error')
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain('pollIntervalSeconds: 需为 ≥5 的整数')   // message 优先 code 兜底
-    expect(wrapper.find('.edit-branch').exists()).toBe(true)   // 失败留在编辑态，可改后重试
+    expect(wrapper.find('tbody .edit-branch').exists()).toBe(true)   // 失败留在编辑态，可改后重试
     expect(fetchMock.mock.calls.filter(c => methodOf(c) === 'PATCH')).toHaveLength(1)
 
-    await wrapper.findAll('button').find(b => b.text() === '取消')!.trigger('click')
+    await cellButton(wrapper, '取消')!.trigger('click')
     await flushPromises()
-    expect(wrapper.find('.edit-branch').exists()).toBe(false)  // 取消退出编辑态
-    expect(wrapper.find('.banner-red').exists()).toBe(false)   // 顺带清掉横幅
+    expect(wrapper.find('tbody .edit-branch').exists()).toBe(false)  // 取消退出编辑态
+    expect(wrapper.find('.el-alert--error').exists()).toBe(false)   // 顺带清掉横幅
     // 取消不触发任何请求：PATCH 仍只有此前失败的 1 次
     expect(fetchMock.mock.calls.filter(c => methodOf(c) === 'PATCH')).toHaveLength(1)
   })
 
   it('前端先行校验：间隔非 ≥5 整数 / 分支为空拦在本地，不发出 PATCH', async () => {
     const { wrapper, fetchMock } = await mountView()
-    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+    await cellButton(wrapper, '编辑')!.trigger('click')
     const save = async (): Promise<void> => {
-      await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+      await cellButton(wrapper, '保存')!.trigger('click')
       await flushPromises()
     }
 
-    await wrapper.find('.edit-interval').setValue('0')
+    await wrapper.find('tbody .edit-interval input').setValue('0')
     await save()
-    expect(wrapper.find('.banner-red').text()).toContain('轮询间隔须为不小于 5 的整数秒')
+    expect(wrapper.find('.el-alert--error').text()).toContain('轮询间隔须为不小于 5 的整数秒')
 
-    await wrapper.find('.edit-interval').setValue('7.5')
+    await wrapper.find('tbody .edit-interval input').setValue('7.5')
     await save()
-    expect(wrapper.find('.banner-red').text()).toContain('轮询间隔须为不小于 5 的整数秒')
+    expect(wrapper.find('.el-alert--error').text()).toContain('轮询间隔须为不小于 5 的整数秒')
 
-    await wrapper.find('.edit-interval').setValue('7')
-    await wrapper.find('.edit-branch').setValue('  ')
+    await wrapper.find('tbody .edit-interval input').setValue('7')
+    await wrapper.find('tbody .edit-branch input').setValue('  ')
     await save()
-    expect(wrapper.find('.banner-red').text()).toContain('默认分支不能为空')
+    expect(wrapper.find('.el-alert--error').text()).toContain('默认分支不能为空')
 
     expect(fetchMock.mock.calls.some(c => methodOf(c) === 'PATCH')).toBe(false)
   })
 
   it('前端先行校验：间隔超上限 604801 拦在本地不发 PATCH；下界 5 合法放行', async () => {
     const { wrapper, fetchMock } = await mountView()
-    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+    await cellButton(wrapper, '编辑')!.trigger('click')
     const save = async (): Promise<void> => {
-      await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+      await cellButton(wrapper, '保存')!.trigger('click')
       await flushPromises()
     }
 
     // 超上界（604800 = 7 天）本地拦截，横幅文案含 604800，零 PATCH 发出
-    await wrapper.find('.edit-interval').setValue('604801')
+    await wrapper.find('tbody .edit-interval input').setValue('604801')
     await save()
-    expect(wrapper.find('.banner-red').text()).toContain('604800')
+    expect(wrapper.find('.el-alert--error').text()).toContain('604800')
     expect(fetchMock.mock.calls.some(c => methodOf(c) === 'PATCH')).toBe(false)
 
     // 下界边界值 5 合法：本地不拦，PATCH 载荷按 5 发出
-    await wrapper.find('.edit-interval').setValue('5')
+    await wrapper.find('tbody .edit-interval input').setValue('5')
     await save()
-    expect(wrapper.find('.banner-red').exists()).toBe(false)
+    expect(wrapper.find('.el-alert--error').exists()).toBe(false)
     const patchCall = fetchMock.mock.calls.find(c => methodOf(c) === 'PATCH')
     expect(patchCall).toBeDefined()
     expect(JSON.parse(String((patchCall![1] as RequestInit).body))).toMatchObject({ pollIntervalSeconds: 5 })
@@ -250,10 +338,10 @@ describe('Repos 视图（仓库管理）', () => {
 
   it('行内编辑输入 Enter 保存：三个编辑输入 keyup.enter 均触发 onSave 发 PATCH', async () => {
     // 覆盖三个可编辑输入（默认分支/轮询间隔/排除 glob）：Enter 与"保存"按钮走同一 onSave 路径
-    for (const sel of ['.edit-branch', '.edit-interval', '.edit-exclude']) {
+    for (const sel of ['tbody .edit-branch', 'tbody .edit-interval', 'tbody .edit-exclude']) {
       const { wrapper, fetchMock } = await mountView()
-      await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
-      await wrapper.find(sel).trigger('keyup.enter')
+      await cellButton(wrapper, '编辑')!.trigger('click')
+      await wrapper.find(`${sel} input`).trigger('keyup.enter')
       await flushPromises()
 
       const patch = fetchMock.mock.calls.find(c => methodOf(c) === 'PATCH')
@@ -264,25 +352,28 @@ describe('Repos 视图（仓库管理）', () => {
         pollIntervalSeconds: 30, defaultBranch: 'main', branchExclude: [],
         bypassGitConfig: false, httpProxy: null, gitConfigPath: null
       })
-      expect(wrapper.find('.edit-branch').exists()).toBe(false)
+      expect(wrapper.find('tbody .edit-branch').exists()).toBe(false)
     }
   })
 
-  it('网络连接方式：下拉默认跟随系统且三选项齐全（省键/无代理/自定义）', async () => {
+  it('网络连接方式：下拉默认跟随系统（is-selected）且三选项文案齐全（省键/无代理/自定义）', async () => {
     const { wrapper } = await mountView()
     const sel = wrapper.find('.add-proxy-mode')
     expect(sel.exists()).toBe(true)
-    expect((sel.element as HTMLSelectElement).value).toBe('system')
-    expect(sel.findAll('option').map(o => o.text())).toEqual([
+    const items = wrapper.findAll('.add-proxy-mode .el-select-dropdown__item')
+    expect(items.map(o => o.text())).toEqual([
       '跟随本机 git 配置', '不走代理（强制无代理）', '通过指定代理服务器连接'
     ])
+    // 默认 system：首项 is-selected（探针：初始未展开也渲染选中态）
+    expect(items[0].classes()).toContain('is-selected')
+    expect(items[1].classes()).not.toContain('is-selected')
   })
 
   it('网络连接方式：勾选绕过系统 git 配置（默认跟随系统）→ POST bypassGitConfig:true 且 httpProxy 省键', async () => {
     const { wrapper, fetchMock } = await mountView()
     await wrapper.find('input[placeholder="repo-id"]').setValue('beta')
     await wrapper.find('input[placeholder="https://example.com/beta.git"]').setValue('https://example.com/beta.git')
-    await wrapper.find('.add-bypass').setValue(true)
+    await wrapper.find('.add-bypass input').setValue(true)
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
@@ -298,7 +389,7 @@ describe('Repos 视图（仓库管理）', () => {
     const { wrapper, fetchMock } = await mountView()
     await wrapper.find('input[placeholder="repo-id"]').setValue('beta')
     await wrapper.find('input[placeholder="https://example.com/beta.git"]').setValue('https://example.com/beta.git')
-    await wrapper.find('.add-proxy-mode').setValue('none')
+    await pickOption(wrapper, '.add-proxy-mode', '不走代理（强制无代理）')
     expect(wrapper.find('.add-proxy').exists()).toBe(false)   // 输入框仅 custom 态显现
     await wrapper.find('form').trigger('submit')
     await flushPromises()
@@ -315,15 +406,15 @@ describe('Repos 视图（仓库管理）', () => {
     await wrapper.find('input[placeholder="https://example.com/beta.git"]').setValue('https://example.com/beta.git')
     // 跟随系统态不渲染代理输入框；custom 态显现
     expect(wrapper.find('.add-proxy').exists()).toBe(false)
-    await wrapper.find('.add-proxy-mode').setValue('custom')
+    await pickOption(wrapper, '.add-proxy-mode', '通过指定代理服务器连接')
     expect(wrapper.find('.add-proxy').exists()).toBe(true)
 
     await wrapper.find('form').trigger('submit')
     await flushPromises()
-    expect(wrapper.find('.banner-red').text()).toContain('代理地址不能为空')
+    expect(wrapper.find('.el-alert--error').text()).toContain('代理地址不能为空')
     expect(fetchMock.mock.calls.some(c => methodOf(c) === 'POST')).toBe(false)
 
-    await wrapper.find('.add-proxy').setValue('http://p:9')
+    await wrapper.find('.add-proxy input').setValue('http://p:9')
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
@@ -351,22 +442,43 @@ describe('Repos 视图（仓库管理）', () => {
     expect(cells[4]).toContain('档案')     // v1.5：指定配置档案 → 角标（title 携带路径）
   })
 
+  // v1.6-T2fix 防回归锚（审查 Important）：行内代理下拉不得用 :teleported="false"。
+  // 根因（EP 样式实证）：.el-table .cell { overflow:hidden } + teleported=false 时 popper 以
+  // absolute 落在 .cell 内部 → 约 90px 的三态下拉被 23px 行高的 cell 裁剪、基本不可见，
+  // jsdom 无布局照不出。锚定"渲染位置"而非属性：探针实证 teleported 是 ElSelect 已声明 prop，
+  // 不落 DOM attribute（attributes('teleported') 恒 undefined，属性断言空转）——
+  // teleported=false → 选项渲染在组件根内；默认（teleport 到 body）→ 选项在 .el-select__popper
+  it('防回归锚：行内编辑代理下拉不在表格 cell 内渲染（teleport 到 body，规避 .cell overflow:hidden 裁剪）', async () => {
+    const { wrapper } = await mountView()
+    await cellButton(wrapper, '编辑')!.trigger('click')
+    await flushPromises()
+
+    expect(
+      wrapper.find('.edit-proxy-mode .el-select-dropdown__item').exists(),
+      '下拉不应渲染在表格 cell 内（overflow:hidden 裁剪陷阱，勿给该 select 加回 :teleported="false"）'
+    ).toBe(false)
+    const docItems = Array.from(document.querySelectorAll<HTMLElement>('.el-select__popper .el-select-dropdown__item'))
+      .map(i => i.textContent?.trim())
+    expect(docItems, '下拉应 teleport 到 document.body（EP 默认行为，非表格内 select 均如此且正常）')
+      .toEqual(['跟随本机配置', '不走代理', '指定代理'])
+  })
+
   it('行内编辑网络连接方式：预填映射三态；保存 PATCH 三态载荷（自定义值/强制直连 ""/跟随系统 null 显式 unset）', async () => {
     const { wrapper, fetchMock } = await mountView({
       reposList: [
         { id: 'r1', url: 'u1', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, httpProxy: 'http://old:1' }
       ]
     })
-    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+    await cellButton(wrapper, '编辑')!.trigger('click')
 
-    // 预填映射：httpProxy 非空 → custom 态 + 输入框回填原值；bypass 省键 → unchecked
-    expect((wrapper.find('.edit-proxy-mode').element as HTMLSelectElement).value).toBe('custom')
-    expect((wrapper.find('.edit-proxy').element as HTMLInputElement).value).toBe('http://old:1')
-    expect((wrapper.find('.edit-bypass').element as HTMLInputElement).checked).toBe(false)
+    // 预填映射：httpProxy 非空 → custom 态（is-selected）+ 输入框回填原值；bypass 省键 → unchecked
+    expect(editProxySelectedLabel()).toBe('指定代理')
+    expect((wrapper.find('tbody .edit-proxy input').element as HTMLInputElement).value).toBe('http://old:1')
+    expect((wrapper.find('tbody .edit-bypass input').element as HTMLInputElement).checked).toBe(false)
 
     // 第一轮：custom 态改值（未勾绕过）→ PATCH 带 bypassGitConfig:false + httpProxy 新值
-    await wrapper.find('.edit-proxy').setValue('http://new:2')
-    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await wrapper.find('tbody .edit-proxy input').setValue('http://new:2')
+    await cellButton(wrapper, '保存')!.trigger('click')
     await flushPromises()
     const i = fetchMock.mock.calls.findIndex(c => methodOf(c) === 'PATCH')
     expect(JSON.parse(String((fetchMock.mock.calls[i][1] as RequestInit).body))).toEqual({
@@ -374,10 +486,10 @@ describe('Repos 视图（仓库管理）', () => {
       bypassGitConfig: false, httpProxy: 'http://new:2', gitConfigPath: null
     })
 
-    // 第二轮：切"强制直连（无代理）"（stub 静态回 http://old:1 → 预填仍 custom）→ PATCH httpProxy:''（bypass 独立保持 false）
-    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
-    await wrapper.find('.edit-proxy-mode').setValue('none')
-    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    // 第二轮：切"不走代理"（stub 静态回 http://old:1 → 重新预填 custom）→ PATCH httpProxy:''（bypass 独立保持 false）
+    await cellButton(wrapper, '编辑')!.trigger('click')
+    await pickOption(wrapper, 'tbody .edit-proxy-mode', '不走代理')
+    await cellButton(wrapper, '保存')!.trigger('click')
     await flushPromises()
     const patchCalls = fetchMock.mock.calls.filter(c => methodOf(c) === 'PATCH')
     expect(patchCalls).toHaveLength(2)
@@ -386,11 +498,11 @@ describe('Repos 视图（仓库管理）', () => {
       bypassGitConfig: false, httpProxy: '', gitConfigPath: null
     })
 
-    // 第三轮：切回"跟随系统 git 配置" → PATCH 显式 httpProxy:null（JSON Merge Patch unset——
+    // 第三轮：切回"跟随本机配置" → PATCH 显式 httpProxy:null（JSON Merge Patch unset——
     // 修复三态编辑缺口：已设代理的仓可经 UI 还原为跟随系统；省键=服务端不改动，不能承载该语义）
-    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
-    await wrapper.find('.edit-proxy-mode').setValue('system')
-    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await cellButton(wrapper, '编辑')!.trigger('click')
+    await pickOption(wrapper, 'tbody .edit-proxy-mode', '跟随本机配置')
+    await cellButton(wrapper, '保存')!.trigger('click')
     await flushPromises()
     const patchCalls3 = fetchMock.mock.calls.filter(c => methodOf(c) === 'PATCH')
     expect(patchCalls3).toHaveLength(3)
@@ -404,18 +516,18 @@ describe('Repos 视图（仓库管理）', () => {
 
   it('行内编辑：省键行预填跟随系统态；选通过代理服务器连接但地址为空 → 本地拦截不发 PATCH', async () => {
     const { wrapper, fetchMock } = await mountView()   // reposPayload r1 无 httpProxy 键
-    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+    await cellButton(wrapper, '编辑')!.trigger('click')
 
-    // 预填映射：省键（undefined=跟随系统）→ system 态且不渲染代理输入框
-    expect((wrapper.find('.edit-proxy-mode').element as HTMLSelectElement).value).toBe('system')
-    expect(wrapper.find('.edit-proxy').exists()).toBe(false)
+    // 预填映射：省键（undefined=跟随系统）→ system 态（is-selected）且不渲染代理输入框
+    expect(editProxySelectedLabel()).toBe('跟随本机配置')
+    expect(wrapper.find('tbody .edit-proxy').exists()).toBe(false)
 
-    await wrapper.find('.edit-proxy-mode').setValue('custom')
-    expect(wrapper.find('.edit-proxy').exists()).toBe(true)   // 仅 custom 态显现
-    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await pickOption(wrapper, 'tbody .edit-proxy-mode', '指定代理')
+    expect(wrapper.find('tbody .edit-proxy').exists()).toBe(true)   // 仅 custom 态显现
+    await cellButton(wrapper, '保存')!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('.banner-red').text()).toContain('代理地址不能为空')
+    expect(wrapper.find('.el-alert--error').text()).toContain('代理地址不能为空')
     expect(fetchMock.mock.calls.some(c => methodOf(c) === 'PATCH')).toBe(false)
   })
 
@@ -424,10 +536,10 @@ describe('Repos 视图（仓库管理）', () => {
     await wrapper.find('input[placeholder="repo-id"]').setValue('beta')
     await wrapper.find('input[placeholder="https://example.com/beta.git"]').setValue('https://example.com/beta.git')
     const cfgInput = wrapper.find('.add-gitcfg')
-    expect(cfgInput.exists()).toBe(true)   // RED：入口缺失（需求①主用户路径）
-    await cfgInput.setValue('  /path/to/git-config  ')
+    expect(cfgInput.exists()).toBe(true)
+    await cfgInput.find('input').setValue('  /path/to/git-config  ')
     // 反向互斥：填了路径 → 直连 checkbox 禁用（服务端生效态 400 mutually_exclusive，前端先拦）
-    expect((wrapper.find('.add-bypass').element as HTMLInputElement).disabled).toBe(true)
+    expect((wrapper.find('.add-bypass input').element as HTMLInputElement).disabled).toBe(true)
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
@@ -443,11 +555,11 @@ describe('Repos 视图（仓库管理）', () => {
     const { wrapper, fetchMock } = await mountView()
     await wrapper.find('input[placeholder="repo-id"]').setValue('beta')
     await wrapper.find('input[placeholder="https://example.com/beta.git"]').setValue('https://example.com/beta.git')
-    const bypass = wrapper.find('.add-bypass')
+    const bypass = wrapper.find('.add-bypass input')
     expect((bypass.element as HTMLInputElement).disabled).toBe(false)   // 路径为空 → 直连可用
     await bypass.setValue(true)
 
-    const cfgInput = wrapper.find('.add-gitcfg')
+    const cfgInput = wrapper.find('.add-gitcfg input')
     expect((cfgInput.element as HTMLInputElement).disabled).toBe(true)   // 勾直连 → 输入禁用
     expect((cfgInput.element as HTMLInputElement).value).toBe('')        // 且被清空
     await wrapper.find('form').trigger('submit')
@@ -466,15 +578,15 @@ describe('Repos 视图（仓库管理）', () => {
         { id: 'r1', url: 'u1', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30, gitConfigPath: '/cfg/a' }
       ]
     })
-    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
-    const cfgInput = wrapper.find('.edit-gitcfg')
-    expect(cfgInput.exists()).toBe(true)   // RED：编辑入口缺失
-    expect((cfgInput.element as HTMLInputElement).value).toBe('/cfg/a')                     // startEdit 预填
-    expect((wrapper.find('.edit-bypass').element as HTMLInputElement).disabled).toBe(true)  // 反向互斥
+    await cellButton(wrapper, '编辑')!.trigger('click')
+    const cfgInput = wrapper.find('tbody .edit-gitcfg')
+    expect(cfgInput.exists()).toBe(true)
+    expect((cfgInput.find('input').element as HTMLInputElement).value).toBe('/cfg/a')                     // startEdit 预填
+    expect((wrapper.find('tbody .edit-bypass input').element as HTMLInputElement).disabled).toBe(true)  // 反向互斥
 
     // 第一轮：换另一路径 → PATCH 回显新路径（trim）
-    await cfgInput.setValue('/cfg/b')
-    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await cfgInput.find('input').setValue('/cfg/b')
+    await cellButton(wrapper, '保存')!.trigger('click')
     await flushPromises()
     const patchCalls = fetchMock.mock.calls.filter(c => methodOf(c) === 'PATCH')
     expect(patchCalls).toHaveLength(1)
@@ -486,13 +598,13 @@ describe('Repos 视图（仓库管理）', () => {
     // 第二轮：清空路径 → 直连解禁 → 勾直连（联动清空+禁用输入）→ 单次保存完成切换。
     // PATCH 显式 gitConfigPath:null：省键会被服务端按"不改动"解释——存量路径原样保留，
     // 与 bypassGitConfig:true 撞生效态互斥 400，单次保存切换必须显式 null（JSON Merge Patch unset）
-    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
-    await wrapper.find('.edit-gitcfg').setValue('')
-    expect((wrapper.find('.edit-bypass').element as HTMLInputElement).disabled).toBe(false)
-    await wrapper.find('.edit-bypass').setValue(true)
-    expect((wrapper.find('.edit-gitcfg').element as HTMLInputElement).disabled).toBe(true)
-    expect((wrapper.find('.edit-gitcfg').element as HTMLInputElement).value).toBe('')
-    await wrapper.findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await cellButton(wrapper, '编辑')!.trigger('click')
+    await wrapper.find('tbody .edit-gitcfg input').setValue('')
+    expect((wrapper.find('tbody .edit-bypass input').element as HTMLInputElement).disabled).toBe(false)
+    await wrapper.find('tbody .edit-bypass input').setValue(true)
+    expect((wrapper.find('tbody .edit-gitcfg input').element as HTMLInputElement).disabled).toBe(true)
+    expect((wrapper.find('tbody .edit-gitcfg input').element as HTMLInputElement).value).toBe('')
+    await cellButton(wrapper, '保存')!.trigger('click')
     await flushPromises()
     const patchCalls2 = fetchMock.mock.calls.filter(c => methodOf(c) === 'PATCH')
     expect(patchCalls2).toHaveLength(2)

@@ -113,9 +113,9 @@ async function onAdd(): Promise<void> {
   }
 }
 
+// v1.6 EP 迁移：删除确认改 el-popconfirm（@confirm 进来；替代原 window.confirm stub 门），
+// 删除语义与 server 一致：停调度 + 移出 config.json；DB 历史保留，同 id 重挂自动接续
 async function onRemove(id: string): Promise<void> {
-  // 删除语义与 server 一致：停调度 + 移出 config.json；DB 历史保留，同 id 重挂自动接续
-  if (!window.confirm('确定停止监控并移除该仓库？历史数据将保留')) return
   try {
     await api.removeRepo(id)
     error.value = ''
@@ -125,14 +125,16 @@ async function onRemove(id: string): Promise<void> {
   }
 }
 
-function badge(r: RepoDto): { cls: string; text: string } {
+// v1.6 EP 迁移：调度状态徽标 badge.cls → el-tag type（success=监听中 / info=空闲·未知 /
+// warning=重试中 / primary=启动中），文案四分支逐字保留
+function badge(r: RepoDto): { type: 'success' | 'info' | 'warning' | 'primary'; text: string } {
   const s = statuses.value[r.id]
-  if (!s) return { cls: 'badge-gray', text: '未知' }
+  if (!s) return { type: 'info', text: '未知' }
   switch (s.state) {
-    case 'running': return { cls: 'badge-green', text: '监听中' }
-    case 'idle': return { cls: 'badge-gray', text: '空闲' }
-    case 'backoff': return { cls: 'badge-yellow', text: '重试中' }
-    case 'starting': return { cls: 'badge-blue', text: '启动中' }
+    case 'running': return { type: 'success', text: '监听中' }
+    case 'idle': return { type: 'info', text: '空闲' }
+    case 'backoff': return { type: 'warning', text: '重试中' }
+    case 'starting': return { type: 'primary', text: '启动中' }
   }
 }
 
@@ -218,14 +220,14 @@ onMounted(() => { void refresh() })
 <template>
   <section class="repos">
     <h2>仓库管理</h2>
-    <p v-if="error" class="banner banner-red">{{ error }}</p>
+    <el-alert v-if="error" class="error-alert" type="error" :title="error" :closable="false" />
 
-    <form class="add-form" @submit.prevent="onAdd">
-      <label>id <input v-model="formId" placeholder="repo-id" /></label>
-      <label>url <input v-model="formUrl" placeholder="https://example.com/beta.git" /></label>
-      <label>默认分支 <input v-model="formBranch" placeholder="master" /></label>
-      <label>轮询间隔秒 <input v-model="formInterval" placeholder="30" /></label>
-      <label>排除 glob <input v-model="formExclude" placeholder="vendor/**,docs/**" /></label>
+    <el-form class="add-form" @submit.prevent="onAdd">
+      <el-form-item label="id"><el-input v-model="formId" placeholder="repo-id" /></el-form-item>
+      <el-form-item label="url"><el-input v-model="formUrl" placeholder="https://example.com/beta.git" /></el-form-item>
+      <el-form-item label="默认分支"><el-input v-model="formBranch" placeholder="master" /></el-form-item>
+      <el-form-item label="轮询间隔秒"><el-input v-model="formInterval" placeholder="30" /></el-form-item>
+      <el-form-item label="排除 glob"><el-input v-model="formExclude" placeholder="vendor/**,docs/**" /></el-form-item>
       <!-- v1.4 网络连接方式（原"传输（高级）"改名，用户反馈旧命名不可理解）：
            代理三态下拉（跟随系统 git 配置/强制直连（无代理）/通过代理服务器连接）+
            "绕过系统 git 配置"独立 checkbox（与代理三态正交，不再是直连的隐含条件）。
@@ -233,129 +235,166 @@ onMounted(() => { void refresh() })
            none httpProxy:'' / custom httpProxy:<输入值>（输入框仅 custom 态显现） -->
       <div class="transport-group">
         <span class="transport-title">网络连接方式</span>
-        <label class="inline-check"
-          title="勾选后，拉取代码时忽略本机 git 全局配置（含代理与凭据助手），直接连接目标仓库。适用于本机 git 配置了代理/改写导致外部仓库不可达的场景；注意私有仓库的存储凭据在此模式下失效">
-          <!-- 反向互斥：填了自定义配置文件 → 直连禁用（服务端生效态 400 mutually_exclusive，前端先拦） -->
-          <input type="checkbox" class="add-bypass" v-model="formBypass" :disabled="formGitConfig.trim() !== ''" /> 忽略本机 git 配置直连
-        </label>
-        <label class="proxy-mode-row">
-          代理
-          <select class="add-proxy-mode" v-model="formProxyMode" title="代理三态：跟随本机 git 配置 / 不走代理（强制无代理）/ 通过指定代理服务器连接">
-            <option value="system">跟随本机 git 配置</option>
-            <option value="none">不走代理（强制无代理）</option>
-            <option value="custom">通过指定代理服务器连接</option>
-          </select>
-        </label>
-        <input
+        <el-checkbox
+          class="add-bypass" v-model="formBypass" :disabled="formGitConfig.trim() !== ''"
+          title="勾选后，拉取代码时忽略本机 git 全局配置（含代理与凭据助手），直接连接目标仓库。适用于本机 git 配置了代理/改写导致外部仓库不可达的场景；注意私有仓库的存储凭据在此模式下失效"
+        >忽略本机 git 配置直连</el-checkbox>
+        <div class="proxy-mode-row">
+          <span>代理</span>
+          <el-select
+            class="add-proxy-mode" v-model="formProxyMode" :teleported="false"
+            title="代理三态：跟随本机 git 配置 / 不走代理（强制无代理）/ 通过指定代理服务器连接"
+          >
+            <el-option label="跟随本机 git 配置" value="system" />
+            <el-option label="不走代理（强制无代理）" value="none" />
+            <el-option label="通过指定代理服务器连接" value="custom" />
+          </el-select>
+        </div>
+        <el-input
           v-if="formProxyMode === 'custom'" class="add-proxy" v-model="formProxy"
           title="显式代理地址，如 http://127.0.0.1:8080"
           placeholder="http://…"
         />
         <!-- v1.5 按仓指定 git 配置档案（可选，与代理/env 正交可组合）：
              与直连互斥——勾直连清空并禁用本输入，填了路径则禁用直连 checkbox -->
-        <label class="gitcfg-row">
-          自定义 git 配置文件（可选）
-          <input
+        <div class="gitcfg-row">
+          <span>自定义 git 配置文件（可选）</span>
+          <el-input
             class="add-gitcfg" v-model="formGitConfig" :disabled="formBypass"
             title="以该文件作为本仓 git 全局配置（GIT_CONFIG_GLOBAL）；与直连互斥"
             placeholder="/path/to/git-config"
           />
-        </label>
+        </div>
       </div>
-      <button class="btn" type="submit">添加</button>
-    </form>
+      <el-button type="primary" native-type="submit">添加</el-button>
+    </el-form>
 
-    <table class="tbl">
-      <thead>
-        <tr><th>id</th><th>url</th><th>默认分支</th><th>轮询间隔</th><th>排除 glob</th><th>传输</th><th>调度状态</th><th>操作</th></tr>
-      </thead>
-      <tbody>
-        <tr v-for="r in repos" :key="r.id">
-          <td><code>{{ r.id }}</code></td>
-          <!-- url 身份键不可改：编辑态保持只读文本 + title 提示，绝不渲染输入框 -->
-          <td class="url-cell" :title="editingId === r.id ? URL_IMMUTABLE_HINT : undefined">{{ r.url }}</td>
-          <td v-if="editingId === r.id"><input class="edit-branch" v-model="editBranch" @keyup.enter="onSave" /></td>
-          <td v-else>{{ r.defaultBranch }}</td>
-          <td v-if="editingId === r.id"><input class="edit-interval" v-model="editInterval" type="number" min="5" step="1" @keyup.enter="onSave" /></td>
-          <td v-else>{{ r.pollIntervalSeconds }}s</td>
-          <td v-if="editingId === r.id"><input class="edit-exclude" v-model="editExclude" @keyup.enter="onSave" /></td>
-          <td v-else class="muted">{{ r.branchExclude?.join(',') || '—' }}</td>
-          <!-- v1.4 网络连接方式列：编辑态就地给绕过 checkbox + 代理三态下拉（输入框仅 custom 态）；
-               展示态四态（直连=绕过/代理=非空/无代理=''/—=省键跟随系统）。
-               读取经 bypassOf/proxyModeOf 兜底——GET 行 httpProxy 未设省键不误渲染 -->
-          <td class="transport-cell">
-            <template v-if="editingId === r.id">
-              <label class="inline-check" title="勾选后，拉取代码时忽略本机 git 全局配置（含代理与凭据助手），直接连接目标仓库">
-                <!-- 反向互斥：填了自定义配置文件 → 直连禁用（与添加表单同款） -->
-                <input type="checkbox" class="edit-bypass" v-model="editBypass" :disabled="editGitConfig.trim() !== ''" /> 忽略配置
-              </label>
-              <select class="edit-proxy-mode" v-model="editProxyMode" title="网络连接方式：跟随本机 git 配置 / 不走代理（强制无代理）/ 通过指定代理服务器连接">
-                <option value="system">跟随本机配置</option>
-                <option value="none">不走代理</option>
-                <option value="custom">指定代理</option>
-              </select>
-              <input v-if="editProxyMode === 'custom'" class="edit-proxy" v-model="editProxy" placeholder="http://…" />
-              <!-- v1.5 git 配置档案输入：勾直连清空并禁用（watcher + :disabled） -->
-              <input
-                class="edit-gitcfg" v-model="editGitConfig" :disabled="editBypass"
-                title="以该文件作为本仓 git 全局配置（GIT_CONFIG_GLOBAL）；与直连互斥"
-                placeholder="/path/to/git-config"
-              />
-            </template>
-            <template v-else>
-              <span v-if="bypassOf(r)" class="badge badge-blue" title="忽略本机 git 配置直连">直连</span>
-              <span v-else-if="proxyOf(r)" class="badge badge-yellow" :title="proxyOf(r)">代理</span>
-              <span v-else-if="'httpProxy' in r" class="muted" title="httpProxy 显式置空：强制无代理">无代理</span>
-              <span v-else class="muted" title="未显式设置：跟随本机 git 配置">—</span>
-              <!-- v1.5 指定配置档案：与代理/直连状态正交（可组合），独立角标展示、title 携带路径 -->
-              <span v-if="gitCfgOf(r)" class="muted" :title="`自定义 git 配置文件: ${gitCfgOf(r)}`">档案</span>
-            </template>
-          </td>
-          <td><span class="badge" :class="badge(r).cls">{{ badge(r).text }}</span></td>
-          <td>
-            <template v-if="editingId === r.id">
-              <button class="btn" @click="onSave">保存</button>
-              <button class="btn" @click="cancelEdit">取消</button>
-            </template>
-            <template v-else>
-              <button class="btn" @click="startEdit(r)">编辑</button>
-              <button class="btn" @click="onRemove(r.id)">删除</button>
-            </template>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <el-table :data="repos" class="repos-table">
+      <el-table-column label="id">
+        <template #default="{ row }"><code>{{ row.id }}</code></template>
+      </el-table-column>
+      <!-- url 身份键不可改：编辑态保持只读文本 + title 提示，绝不渲染输入框 -->
+      <el-table-column label="url" class-name="url-cell" min-width="220">
+        <template #default="{ row }">
+          <span class="url-text" :title="editingId === row.id ? URL_IMMUTABLE_HINT : undefined">{{ row.url }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="默认分支" min-width="150">
+        <template #default="{ row }">
+          <el-input v-if="editingId === row.id" v-model="editBranch" class="edit-branch" @keyup.enter="onSave" />
+          <template v-else>{{ row.defaultBranch }}</template>
+        </template>
+      </el-table-column>
+      <el-table-column label="轮询间隔" min-width="130">
+        <template #default="{ row }">
+          <el-input
+            v-if="editingId === row.id" v-model="editInterval" class="edit-interval"
+            type="number" min="5" step="1" @keyup.enter="onSave"
+          />
+          <template v-else>{{ row.pollIntervalSeconds }}s</template>
+        </template>
+      </el-table-column>
+      <el-table-column label="排除 glob" min-width="150">
+        <template #default="{ row }">
+          <el-input v-if="editingId === row.id" v-model="editExclude" class="edit-exclude" @keyup.enter="onSave" />
+          <span v-else class="muted">{{ row.branchExclude?.join(',') || '—' }}</span>
+        </template>
+      </el-table-column>
+      <!-- v1.4 网络连接方式列：编辑态就地给绕过 checkbox + 代理三态下拉（输入框仅 custom 态）；
+           展示态四态（直连=绕过/代理=非空/无代理=''/—=省键跟随系统）。
+           读取经 bypassOf/proxyModeOf 兜底——GET 行 httpProxy 未设省键不误渲染 -->
+      <el-table-column label="传输" class-name="transport-cell" min-width="280">
+        <template #default="{ row }">
+          <template v-if="editingId === row.id">
+            <el-checkbox
+              class="edit-bypass" v-model="editBypass" :disabled="editGitConfig.trim() !== ''"
+              title="勾选后，拉取代码时忽略本机 git 全局配置（含代理与凭据助手），直接连接目标仓库"
+            >忽略配置</el-checkbox>
+            <!-- v1.6-T2fix：teleported 保持默认（弹层 teleport 到 body）——表格 .cell 的
+                 overflow:hidden 会裁剪落在 cell 内部的 absolute 弹层（三态下拉约 90px 高，
+                 仅剩 23px 行高可见、基本不可见）；防回归锚见 Repos.test.ts「防回归锚」用例 -->
+            <el-select
+              class="edit-proxy-mode" v-model="editProxyMode"
+              title="网络连接方式：跟随本机 git 配置 / 不走代理（强制无代理）/ 通过指定代理服务器连接"
+            >
+              <el-option label="跟随本机配置" value="system" />
+              <el-option label="不走代理" value="none" />
+              <el-option label="指定代理" value="custom" />
+            </el-select>
+            <el-input v-if="editProxyMode === 'custom'" class="edit-proxy" v-model="editProxy" placeholder="http://…" />
+            <!-- v1.5 git 配置档案输入：勾直连清空并禁用（watcher + :disabled） -->
+            <el-input
+              class="edit-gitcfg" v-model="editGitConfig" :disabled="editBypass"
+              title="以该文件作为本仓 git 全局配置（GIT_CONFIG_GLOBAL）；与直连互斥"
+              placeholder="/path/to/git-config"
+            />
+          </template>
+          <template v-else>
+            <el-tag v-if="bypassOf(row as RepoDto)" title="忽略本机 git 配置直连">直连</el-tag>
+            <el-tag v-else-if="proxyOf(row as RepoDto)" type="warning" :title="proxyOf(row as RepoDto)">代理</el-tag>
+            <span v-else-if="'httpProxy' in row" class="muted" title="httpProxy 显式置空：强制无代理">无代理</span>
+            <span v-else class="muted" title="未显式设置：跟随本机 git 配置">—</span>
+            <!-- v1.5 指定配置档案：与代理/直连状态正交（可组合），独立角标展示、title 携带路径 -->
+            <el-tag v-if="gitCfgOf(row as RepoDto)" class="gitcfg-tag" type="info" effect="plain" :title="`自定义 git 配置文件: ${gitCfgOf(row as RepoDto)}`">档案</el-tag>
+          </template>
+        </template>
+      </el-table-column>
+      <el-table-column label="调度状态">
+        <template #default="{ row }">
+          <el-tag :type="badge(row as RepoDto).type" effect="light">{{ badge(row as RepoDto).text }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="170">
+        <template #default="{ row }">
+          <template v-if="editingId === row.id">
+            <el-button type="primary" size="small" @click="onSave">保存</el-button>
+            <el-button size="small" @click="cancelEdit">取消</el-button>
+          </template>
+          <template v-else>
+            <el-button size="small" @click="startEdit(row as RepoDto)">编辑</el-button>
+            <!-- 删除确认：el-popconfirm 替代 window.confirm；确认文案保留原业务提示。
+                 探针实证（zz-probe，临时不提交）：默认 action 按钮在本 jsdom/vitest 环境
+                 （vite 管 element-plus + VTU transition 处理组合）下 @confirm 不触发——
+                 改用 #actions 作用域插槽显式给取消/确定按钮（调用插槽 confirm/cancel），
+                 全配置组合下稳定触发，且顺带锁定中文按钮文案（默认是英文 Yes/No）；
+                 UI 与默认渲染等效 -->
+            <el-popconfirm
+              title="确定停止监控并移除该仓库？历史数据将保留"
+              @confirm="onRemove((row as RepoDto).id)"
+            >
+              <template #reference>
+                <el-button size="small" type="danger" plain>删除</el-button>
+              </template>
+              <template #actions="{ confirm, cancel }">
+                <el-button size="small" class="pop-cancel" @click="cancel">取消</el-button>
+                <el-button size="small" type="primary" class="pop-confirm" @click="confirm">确定</el-button>
+              </template>
+            </el-popconfirm>
+          </template>
+        </template>
+      </el-table-column>
+    </el-table>
     <p v-if="!repos.length" class="muted">暂无仓库——用上方表单添加第一个仓库。</p>
   </section>
 </template>
 
 <style scoped>
-/* style.css 不在本任务修改清单内：表单布局以 scoped 规则就近提供（CrossRepo 先例） */
-.add-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 16px; }
-.add-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-.add-form input { padding: 4px 8px; border-radius: 6px; border: 1px solid #d0d7de; min-width: 160px; }
-/* 行内编辑输入与添加表单同视觉语言；url 列编辑态保持只读文本（灰化以示不可改） */
-.tbl input { padding: 2px 8px; border-radius: 6px; border: 1px solid #d0d7de; width: 140px; }
-.url-cell { color: #656d76; }
-/* v1.4 网络连接方式区：与表单 label 同列布局语言；代理三态下拉 + 仅 custom 态显现的代理输入 */
-.transport-group { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+/* style.css 不在本任务修改清单内：表单布局以 scoped 规则就近提供（CrossRepo 先例）；
+   v1.6 EP 迁移后控件视觉（边框/暗色）交由 EP 组件与 html.dark 变量体系，scoped 只管布局 */
+.add-form { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: flex-start; margin-bottom: 16px; }
+.add-form :deep(.el-form-item) { margin-bottom: 8px; }
+.transport-group { display: flex; flex-direction: column; gap: 6px; font-size: 13px; padding-top: 4px; }
 .transport-title { font-weight: 600; }
-.inline-check { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-.inline-check input { min-width: 0; }
-.proxy-mode-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-/* v1.5 git 配置档案行：与代理行同视觉语言（label 包文字+输入） */
-.gitcfg-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-.transport-group select { padding: 4px 8px; border-radius: 6px; border: 1px solid #d0d7de; }
-.add-proxy { padding: 4px 8px; border-radius: 6px; border: 1px solid #d0d7de; min-width: 280px; }
-.transport-cell { white-space: nowrap; }
-.transport-cell select { padding: 2px 8px; border-radius: 6px; border: 1px solid #d0d7de; }
-.transport-cell .edit-proxy { width: 120px; }
-/* 深色模式：style.css 不在本任务修改清单内，scoped 就近补齐（与 .pick select 暗色语言同源，
-   防浅底继承浅字不可读——v1.3.2 表单控件对比度修复的同类问题） */
-@media (prefers-color-scheme: dark) {
-  .transport-group select, .transport-cell select {
-    background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
-  }
-  .transport-group select:focus, .transport-cell select:focus { border-color: #58a6ff; }
-}
+.proxy-mode-row, .gitcfg-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.add-proxy, .add-gitcfg { min-width: 280px; }
+/* 行内编辑输入与添加表单同视觉语言；url 列编辑态保持只读文本（灰化以示不可改）。
+   td 由 el-table 自身 render 产出、不带父组件 scope 属性 → scoped 单类规则
+   （.url-cell[data-v] 等）静态失效，统一迁 .repos-table :deep(...) 穿透
+   （Overview .branch-table 先例；编译产物形如 .repos-table[data-v] td.url-cell）。
+   .gitcfg-tag 保留 scoped：el-tag 根在模板内、继承 scope 属性，规则本就存活 */
+.repos-table :deep(td.url-cell) { color: #656d76; }
+.repos-table :deep(td.transport-cell) { white-space: nowrap; }
+.repos-table :deep(.transport-cell .el-input) { width: 130px; }
+.repos-table :deep(.transport-cell .el-select) { width: 120px; }
+.transport-cell .gitcfg-tag { margin-left: 6px; }
 </style>
