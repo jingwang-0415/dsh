@@ -111,8 +111,10 @@ async function onSyncNow(): Promise<void> {
   }
 }
 
-// 切仓：回写当前 query（URL 即状态），再按新仓刷新（同步结果为瞬时消息，无需清横幅）
+// 切仓：清掉旧仓瞬时消息（v1.6-T2fix 恢复旧语义：ElMessage 3s 自灭期间会残留到新仓语境）
+// → 回写当前 query（URL 即状态）→ 按新仓刷新
 function onRepoChange(): void {
+  ElMessage.closeAll()
   void router.replace({ path: '/', query: repoId.value ? { repo: repoId.value } : {} })
   void refresh()
 }

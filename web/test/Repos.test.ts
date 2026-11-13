@@ -9,7 +9,10 @@ import Repos from '../src/views/Repos.vue'
 // 状态分支/三分支语义/互斥联动）。探针实证（zz-probe，临时文件不提交）：
 // - VTU 默认 stub transition 会吞掉 el-tag 根节点 → mount 统一 stubs.transition=false
 // - el-table mounted 依赖 ResizeObserver（jsdom 无）→ mountView 内 stubGlobal
-// - el-select :teleported="false" → 选项渲染在组件根内可作用域查询，未展开亦可直接点击选项完成选择
+// - el-select teleported=false（添加表单 select，无 overflow 容器）→ 选项渲染在组件根内可作用域
+//   查询，未展开亦可直接点击选项完成选择；行内编辑下拉（表格 cell 内）v1.6-T2fix 起移除
+//   teleported=false、走 EP 默认 teleport 到 document.body（cell overflow:hidden 会裁剪 cell 内
+//   弹层，防回归锚见「防回归锚」用例）→ 选项定位走 document 查询（openPopconfirm 同款模式）
 // - el-popconfirm：默认 teleport 到 document.body，必须显式 confirm/cancel-button-text（默认 Yes/No）
 // - el-input/el-checkbox：class 落 wrapper，原生 input 用 `.class input` 定位（setValue/checked/disabled）
 
@@ -69,31 +72,57 @@ async function mountView(opts: FetchOpts = {}) {
   return { wrapper, fetchMock }
 }
 
-// el-select（teleported=false）作用域内按文案点选项（探针：未展开亦可直接选中并触发 change）
+// el-select 选项点击：优先组件内作用域查询（添加表单 select teleported=false，预渲染在根内），
+// 未命中回退 document.body（行内编辑下拉默认 teleport——见「防回归锚」用例；VTU wrapper 外，
+// 与 openPopconfirm 的 document 查询同模式）。探针：未展开亦可直接点击选项完成选择
 async function pickOption(wrapper: VueWrapper, sel: string, label: string): Promise<void> {
-  const item = wrapper
+  const scopedItem = wrapper
     .findAll(`${sel} .el-select-dropdown__item`)
     .find(i => i.text() === label)
-  expect(item, `下拉选项「${label}」应存在于 ${sel}`).toBeDefined()
-  await item!.trigger('click')
+  if (scopedItem) {
+    await scopedItem.trigger('click')
+    await flushPromises()
+    return
+  }
+  // teleport 路径：选项在 body 的 .el-select__popper（本页仅行内编辑下拉走此路径，无歧义）
+  const item = Array.from(document.querySelectorAll<HTMLElement>('.el-select__popper .el-select-dropdown__item'))
+    .find(i => i.textContent?.trim() === label)
+  expect(item, `下拉选项「${label}」应存在于 body 弹层（${sel}）`).not.toBeNull()
+  item!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   await flushPromises()
 }
+
+// 行内编辑下拉当前选中项文案（teleport 后选项在 body 弹层，选中态由 is-selected 标记）
+const editProxySelectedLabel = (): string =>
+  Array.from(document.querySelectorAll<HTMLElement>('.el-select__popper .el-select-dropdown__item'))
+    .find(i => i.classList.contains('is-selected'))?.textContent?.trim() ?? ''
 
 // 表格内按钮一律收敛到 tbody 定位（探针实证：el-table-column 会在 .hidden-columns 以哑上下文
 // { row: {} } 额外渲染一次列默认插槽——影子克隆里的按钮不带真实行数据，全文查找必须避开）
 const cellButton = (wrapper: VueWrapper, text: string): DOMWrapper<Element> | undefined =>
   wrapper.findAll('tbody tr button').find(b => b.text() === text)
 
-// el-popconfirm（默认 teleport 到 body）：点开引用按钮 → 返回 popper 元素
+// 轮询查询 helper（v1.6-T2fix；@vue/test-utils 2.4.4 无 waitFor 导出，按任务约定的轮询断言
+// helper 收敛）：每 10ms 查一次直到非空或超时（超时抛说明性错误）——替代探针遗留的固定
+// setTimeout 宏任务间隙（原 10ms hack 依赖时序猜测，慢 CI 上是 flake 面），不猜时序不 flake
+async function waitForNode<T extends Element>(get: () => T | null, what: string, timeoutMs = 2000): Promise<T> {
+  const step = 10
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const el = get()
+    if (el) return el
+    if (Date.now() >= deadline) throw new Error(`waitFor 超时（${timeoutMs}ms）：${what}`)
+    await new Promise(r => setTimeout(r, step))
+  }
+}
+
+// el-popconfirm（默认 teleport 到 body）：点开引用按钮 → 返回 popper 元素（popper 挂载走轮询）
 async function openPopconfirm(wrapper: VueWrapper, btnText: string): Promise<HTMLElement> {
   const btn = wrapper.findAll('tbody tr button').find(b => b.text() === btnText)
   expect(btn, `按钮「${btnText}」应存在`).toBeDefined()
   await btn!.trigger('click')
   await flushPromises()
-  await new Promise(r => setTimeout(r, 10))   // 探针实证：popper 挂载需一个宏任务间隙
-  const pop = document.querySelector('.el-popper.el-popover') as HTMLElement | null
-  expect(pop, 'popconfirm 弹层应渲染').not.toBeNull()
-  return pop!
+  return waitForNode(() => document.querySelector<HTMLElement>('.el-popper.el-popover'), 'popconfirm 弹层应渲染')
 }
 
 const popAction = (pop: HTMLElement, label: string): HTMLElement => {
@@ -413,6 +442,27 @@ describe('Repos 视图（仓库管理，EP 迁移适配）', () => {
     expect(cells[4]).toContain('档案')     // v1.5：指定配置档案 → 角标（title 携带路径）
   })
 
+  // v1.6-T2fix 防回归锚（审查 Important）：行内代理下拉不得用 :teleported="false"。
+  // 根因（EP 样式实证）：.el-table .cell { overflow:hidden } + teleported=false 时 popper 以
+  // absolute 落在 .cell 内部 → 约 90px 的三态下拉被 23px 行高的 cell 裁剪、基本不可见，
+  // jsdom 无布局照不出。锚定"渲染位置"而非属性：探针实证 teleported 是 ElSelect 已声明 prop，
+  // 不落 DOM attribute（attributes('teleported') 恒 undefined，属性断言空转）——
+  // teleported=false → 选项渲染在组件根内；默认（teleport 到 body）→ 选项在 .el-select__popper
+  it('防回归锚：行内编辑代理下拉不在表格 cell 内渲染（teleport 到 body，规避 .cell overflow:hidden 裁剪）', async () => {
+    const { wrapper } = await mountView()
+    await cellButton(wrapper, '编辑')!.trigger('click')
+    await flushPromises()
+
+    expect(
+      wrapper.find('.edit-proxy-mode .el-select-dropdown__item').exists(),
+      '下拉不应渲染在表格 cell 内（overflow:hidden 裁剪陷阱，勿给该 select 加回 :teleported="false"）'
+    ).toBe(false)
+    const docItems = Array.from(document.querySelectorAll<HTMLElement>('.el-select__popper .el-select-dropdown__item'))
+      .map(i => i.textContent?.trim())
+    expect(docItems, '下拉应 teleport 到 document.body（EP 默认行为，非表格内 select 均如此且正常）')
+      .toEqual(['跟随本机配置', '不走代理', '指定代理'])
+  })
+
   it('行内编辑网络连接方式：预填映射三态；保存 PATCH 三态载荷（自定义值/强制直连 ""/跟随系统 null 显式 unset）', async () => {
     const { wrapper, fetchMock } = await mountView({
       reposList: [
@@ -422,11 +472,7 @@ describe('Repos 视图（仓库管理，EP 迁移适配）', () => {
     await cellButton(wrapper, '编辑')!.trigger('click')
 
     // 预填映射：httpProxy 非空 → custom 态（is-selected）+ 输入框回填原值；bypass 省键 → unchecked
-    const selectedLabel = (): string => {
-      const sel = wrapper.findAll('tbody .edit-proxy-mode .el-select-dropdown__item').find(i => i.classes().includes('is-selected'))
-      return sel?.text() ?? ''
-    }
-    expect(selectedLabel()).toBe('指定代理')
+    expect(editProxySelectedLabel()).toBe('指定代理')
     expect((wrapper.find('tbody .edit-proxy input').element as HTMLInputElement).value).toBe('http://old:1')
     expect((wrapper.find('tbody .edit-bypass input').element as HTMLInputElement).checked).toBe(false)
 
@@ -473,11 +519,7 @@ describe('Repos 视图（仓库管理，EP 迁移适配）', () => {
     await cellButton(wrapper, '编辑')!.trigger('click')
 
     // 预填映射：省键（undefined=跟随系统）→ system 态（is-selected）且不渲染代理输入框
-    const selectedLabel = (): string => {
-      const sel = wrapper.findAll('tbody .edit-proxy-mode .el-select-dropdown__item').find(i => i.classes().includes('is-selected'))
-      return sel?.text() ?? ''
-    }
-    expect(selectedLabel()).toBe('跟随本机配置')
+    expect(editProxySelectedLabel()).toBe('跟随本机配置')
     expect(wrapper.find('tbody .edit-proxy').exists()).toBe(false)
 
     await pickOption(wrapper, 'tbody .edit-proxy-mode', '指定代理')

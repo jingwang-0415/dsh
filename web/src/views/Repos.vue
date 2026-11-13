@@ -310,8 +310,11 @@ onMounted(() => { void refresh() })
               class="edit-bypass" v-model="editBypass" :disabled="editGitConfig.trim() !== ''"
               title="勾选后，拉取代码时忽略本机 git 全局配置（含代理与凭据助手），直接连接目标仓库"
             >忽略配置</el-checkbox>
+            <!-- v1.6-T2fix：teleported 保持默认（弹层 teleport 到 body）——表格 .cell 的
+                 overflow:hidden 会裁剪落在 cell 内部的 absolute 弹层（三态下拉约 90px 高，
+                 仅剩 23px 行高可见、基本不可见）；防回归锚见 Repos.test.ts「防回归锚」用例 -->
             <el-select
-              class="edit-proxy-mode" v-model="editProxyMode" :teleported="false"
+              class="edit-proxy-mode" v-model="editProxyMode"
               title="网络连接方式：跟随本机 git 配置 / 不走代理（强制无代理）/ 通过指定代理服务器连接"
             >
               <el-option label="跟随本机配置" value="system" />

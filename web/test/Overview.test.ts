@@ -79,6 +79,19 @@ const syncButton = (wrapper: VueWrapper): DOMWrapper<Element> =>
 // ElMessage 落 document.body（VTU wrapper 之外）
 const messageNodes = (): HTMLElement[] => Array.from(document.querySelectorAll('.el-message'))
 
+// 轮询断言 helper（v1.6-T2fix；@vue/test-utils 2.4.4 无 waitFor 导出，按任务约定的轮询断言
+// helper 收敛）：反复执行断言直到通过或超时，超时抛最后一次断言错误——不猜时序，慢 CI 不 flake
+async function waitFor(assert: () => void, timeoutMs = 2000): Promise<void> {
+  const step = 10
+  const deadline = Date.now() + timeoutMs
+  let last: unknown
+  for (;;) {
+    try { await assert(); return } catch (e) { last = e }
+    if (Date.now() >= deadline) throw last
+    await new Promise(r => setTimeout(r, step))
+  }
+}
+
 // 切仓：el-select（teleported=false）作用域内按文本点选项（探针：未展开亦可直接选中并触发 change）
 async function selectRepo(wrapper: VueWrapper, id: string): Promise<void> {
   const item = wrapper
@@ -233,6 +246,35 @@ describe('Overview 手动同步按钮（v1.3.2，EP 迁移适配）', () => {
     const posts = fetchMock.mock.calls.filter(c => ((c[1] as RequestInit | undefined)?.method) === 'POST')
     expect(posts).toHaveLength(2)
     expect(posts.every(c => c[0] === '/api/repos/r1/sync')).toBe(true)   // 两次都发往旧仓（发起时捕获）
+  })
+
+  it('切仓清旧仓瞬时消息（v1.6-T2fix：onRepoChange 恢复 closeAll 旧语义，旧仓 toast 不残留新仓语境）', async () => {
+    // 旧仓"检出 2"success 消息落笔 → 切到 r2（el-select @change → onRepoChange）→ closeAll 清掉。
+    // ElMessage 默认 3s 自灭：不清消息则 3s 内残留新仓语境（审查 Minor，一行恢复）
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return { ok: true, json: async () => ({ ok: true, newCommits: 2 }) }
+      if (url.startsWith('/api/status')) return { ok: true, json: async () => statusPayload }
+      if (url.startsWith('/api/branches')) return { ok: true, json: async () => [] }
+      if (url === '/api/repos') {
+        return {
+          ok: true,
+          json: async () => [
+            { id: 'r1', url: 'u', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30 },
+            { id: 'r2', url: 'u', defaultBranch: 'main', branchExclude: [], pollIntervalSeconds: 30 }
+          ]
+        }
+      }
+      return { ok: true, json: async () => ({}) }
+    })
+    const { wrapper } = await mountView({}, fetchMock)
+    await syncButton(wrapper).trigger('click')
+    await flushPromises()
+    expect(messageNodes().some(m => m.textContent?.includes('手动同步完成：检出 2 个新提交'))).toBe(true)
+
+    await selectRepo(wrapper, 'r2')
+    // closeAll 触发 leave 过渡（探针实证：flushPromises 等不到节点移除，轮询数帧内收敛）；
+    // 不清消息时 3s 自灭定时器远长于 2s 轮询窗 → 必超时失败，糊不了假绿
+    await waitFor(() => expect(messageNodes(), '切仓应清掉旧仓瞬时消息（ElMessage.closeAll）').toHaveLength(0))
   })
 })
 
