@@ -1,14 +1,26 @@
-:root { color-scheme: light dark; }
+/* v1.6 Task 1（Element Plus 接入）精简说明：
+   - 删除 .nav 手写导航（被 el-menu 取代，App.vue 重写）。
+   - 暗色块由 @media (prefers-color-scheme: dark) 改为 html.dark 类驱动，
+     与手动主题切换（localStorage('theme')）统一；缺省跟随系统由 main.ts 初始化落实。
+   - .banner / .tbl / .badge / .rows / .row-* / .dot / .btn / .pick / .cols / .commit-body / .muted
+     仍被未迁移的视图（T2/T3）引用，grep 核对后保留；视图重写后逐步删除，由 EP 变量接管。 */
+:root { color-scheme: light; }
+html.dark { color-scheme: dark; }
 * { box-sizing: border-box; }
 body { font-family: system-ui, -apple-system, "PingFang SC", sans-serif; margin: 0; color: #1f2328; background: #f6f8fa; }
-.app { max-width: 1080px; margin: 0 auto; padding: 16px; }
-.nav { display: flex; gap: 16px; margin-bottom: 16px; font-size: 15px; }
-.nav a { text-decoration: none; color: #0969da; padding: 4px 8px; border-radius: 6px; }
-.nav a.router-link-active { background: #ddf4ff; }
+
+/* ===== 布局骨架（el-container）微调；背景/配色由 EP 变量与暗色块接管 ===== */
+.app { height: 100vh; }
+.app-aside { border-right: 1px solid var(--el-border-color-light); }
+.app-menu { height: 100%; border-right: none; }
+.app-header { display: flex; align-items: center; justify-content: flex-end; border-bottom: 1px solid var(--el-border-color-light); }
+.app-main { width: 100%; max-width: 1080px; margin: 0 auto; }
+
 h2, h3 { margin: 12px 0 8px; }
 .muted { color: #656d76; font-size: 13px; }
 .muted.err { color: #cf222e; }
 code { background: #eff1f3; padding: 1px 5px; border-radius: 4px; }
+a { color: #0969da; text-decoration: none; }
 
 .banner { padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; font-size: 14px; }
 .banner-green { background: #dafbe1; color: #116329; }
@@ -45,55 +57,52 @@ button.badge { cursor: pointer; }
 .pick { display: flex; gap: 16px; margin-bottom: 12px; }
 .pick select { padding: 4px 8px; border-radius: 6px; }
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-a { color: #0969da; text-decoration: none; }
-@media (prefers-color-scheme: dark) {
-  body { background: #0d1117; color: #e6edf3; }
-  .tbl, .row, .commit-body, .rows .row { background: #161b22; border-color: #30363d; }
-  .tbl th { background: #161b22; }
-  .tbl th, .tbl td { border-color: #30363d; }
-  .muted { color: #8b949e; }
-  code { background: #21262d; }
-  .nav a.router-link-active { background: #121d2f; }
 
-  /* 交互控件显式配色：修复“浅底继承浅字”不可读（v1.3.2 Task 3） */
-  .btn { background: #21262d; color: #e6edf3; border-color: #30363d; }
-  .btn:hover { background: #30363d; }
+/* ===== 暗色（html.dark 类驱动；视图迁移完成后逐步收敛为 EP 变量） ===== */
+html.dark body { background: #0d1117; color: #e6edf3; }
+html.dark .tbl, html.dark .row, html.dark .commit-body, html.dark .rows .row { background: #161b22; border-color: #30363d; }
+html.dark .tbl th { background: #161b22; }
+html.dark .tbl th, html.dark .tbl td { border-color: #30363d; }
+html.dark .muted { color: #8b949e; }
+html.dark code { background: #21262d; }
 
-  /* 表单控件：显式深色底/字/边框，避免 UA 行为不一致。
-     带 .app/.repos 前缀的三条用更高特异性（0,3,1）压过 Repos.vue / CrossRepo.vue
-     scoped 的浅色边框（border: #d0d7de, 0,2,1）；
-     :not([type="checkbox"]) 排除 UA 自绘的复选框。 */
-  .pick select, textarea, input:not([type="checkbox"]),
-  .app .pick input:not([type="checkbox"]),
-  .repos .add-form input:not([type="checkbox"]),
-  .repos .tbl input:not([type="checkbox"]) {
-    background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
-  }
-  .pick select:focus, textarea:focus, input:not([type="checkbox"]):focus,
-  .app .pick input:not([type="checkbox"]):focus,
-  .repos .add-form input:not([type="checkbox"]):focus,
-  .repos .tbl input:not([type="checkbox"]):focus { border-color: #58a6ff; }
+/* 交互控件显式配色：修复“浅底继承浅字”不可读（v1.3.2 Task 3） */
+html.dark .btn { background: #21262d; color: #e6edf3; border-color: #30363d; }
+html.dark .btn:hover { background: #30363d; }
 
-  /* 链接与错误文字：#0969da/#cf222e 在深底上仅 3.3–3.7:1，提亮至 GitHub 暗色系 */
-  .nav a { color: #58a6ff; }
-  a { color: #58a6ff; }
-  .muted.err { color: #f85149; }
-
-  /* badge/banner：浅色粉彩底在暗色下刺眼，换半透明色底 + 提亮前景（对比 ≥4.5:1） */
-  .badge-red, .banner-red { background: rgba(248, 81, 73, 0.15); color: #f85149; }
-  .badge-green, .banner-green { background: rgba(63, 185, 80, 0.15); color: #56d364; }
-  .badge-yellow, .banner-yellow { background: rgba(187, 128, 9, 0.25); color: #d29922; }
-  .badge-gray, .banner-gray { background: rgba(139, 148, 158, 0.15); color: #8b949e; }
-  .badge-blue { background: rgba(88, 166, 255, 0.15); color: #58a6ff; }
-
-  /* 行状态色：暗色块已有 .rows .row(0,2,0) 覆盖浅底，此处补齐文字/色底（特异性 0,2,1 确保生效） */
-  .rows li.row-miss { background: rgba(248, 81, 73, 0.15); color: #f85149; }
-  .rows li.row-ok { background: rgba(63, 185, 80, 0.15); color: #56d364; }
-  .rows li.row-other { background: rgba(139, 148, 158, 0.15); color: #8b949e; }
-  .dot-red { background: #f85149; }
-  .dot-green { background: #3fb950; }
-  .dot-gray { background: #8b949e; }
-
-  /* Repos.vue scoped .url-cell(#656d76) 在暗色表格上仅 3.3:1，用更高特异性提亮 */
-  .repos .tbl .url-cell { color: #8b949e; }
+/* 表单控件：显式深色底/字/边框，避免 UA 行为不一致。
+   带 .app/.repos 前缀的三条用更高特异性压过 Repos.vue / CrossRepo.vue
+   scoped 的浅色边框（border: #d0d7de）；
+   :not([type="checkbox"]) 排除 UA 自绘的复选框。 */
+html.dark .pick select, html.dark textarea, html.dark input:not([type="checkbox"]),
+html.dark .app .pick input:not([type="checkbox"]),
+html.dark .repos .add-form input:not([type="checkbox"]),
+html.dark .repos .tbl input:not([type="checkbox"]) {
+  background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
 }
+html.dark .pick select:focus, html.dark textarea:focus, html.dark input:not([type="checkbox"]):focus,
+html.dark .app .pick input:not([type="checkbox"]):focus,
+html.dark .repos .add-form input:not([type="checkbox"]):focus,
+html.dark .repos .tbl input:not([type="checkbox"]):focus { border-color: #58a6ff; }
+
+/* 链接与错误文字：#0969da/#cf222e 在深底上仅 3.3–3.7:1，提亮至 GitHub 暗色系 */
+html.dark a { color: #58a6ff; }
+html.dark .muted.err { color: #f85149; }
+
+/* badge/banner：浅色粉彩底在暗色下刺眼，换半透明色底 + 提亮前景（对比 ≥4.5:1） */
+html.dark .badge-red, html.dark .banner-red { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+html.dark .badge-green, html.dark .banner-green { background: rgba(63, 185, 80, 0.15); color: #56d364; }
+html.dark .badge-yellow, html.dark .banner-yellow { background: rgba(187, 128, 9, 0.25); color: #d29922; }
+html.dark .badge-gray, html.dark .banner-gray { background: rgba(139, 148, 158, 0.15); color: #8b949e; }
+html.dark .badge-blue { background: rgba(88, 166, 255, 0.15); color: #58a6ff; }
+
+/* 行状态色：暗色块已有 .rows .row 覆盖浅底，此处补齐文字/色底 */
+html.dark .rows li.row-miss { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+html.dark .rows li.row-ok { background: rgba(63, 185, 80, 0.15); color: #56d364; }
+html.dark .rows li.row-other { background: rgba(139, 148, 158, 0.15); color: #8b949e; }
+html.dark .dot-red { background: #f85149; }
+html.dark .dot-green { background: #3fb950; }
+html.dark .dot-gray { background: #8b949e; }
+
+/* Repos.vue scoped .url-cell(#656d76) 在暗色表格上仅 3.3:1，用更高特异性提亮 */
+html.dark .repos .tbl .url-cell { color: #8b949e; }
