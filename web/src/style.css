@@ -37,14 +37,6 @@ html.dark .row, html.dark .commit-body, html.dark .rows .row { background: #161b
 html.dark .muted { color: #8b949e; }
 html.dark code { background: #21262d; }
 
-/* 表单控件：显式深色底/字/边框（el-input/el-select 内层原生 input 亦命中，兜底一致观感）。
-   原 .app .pick/.repos .add-form/.repos .tbl 高特异性变体专为压过 scoped 浅色边框，
-   scoped 规则已随 EP 迁移消亡，收敛为通用规则即可 */
-html.dark textarea, html.dark input:not([type="checkbox"]) {
-  background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
-}
-html.dark textarea:focus, html.dark input:not([type="checkbox"]):focus { border-color: #58a6ff; }
-
 /* 链接与错误文字：#0969da/#cf222e 在深底上仅 3.3–3.7:1，提亮至 GitHub 暗色系 */
 html.dark a { color: #58a6ff; }
 html.dark .muted.err { color: #f85149; }

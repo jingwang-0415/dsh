@@ -269,7 +269,7 @@ onMounted(() => { void refresh() })
       <el-button type="primary" native-type="submit">添加</el-button>
     </el-form>
 
-    <el-table :data="repos">
+    <el-table :data="repos" class="repos-table">
       <el-table-column label="id">
         <template #default="{ row }"><code>{{ row.id }}</code></template>
       </el-table-column>
@@ -387,10 +387,14 @@ onMounted(() => { void refresh() })
 .transport-title { font-weight: 600; }
 .proxy-mode-row, .gitcfg-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .add-proxy, .add-gitcfg { min-width: 280px; }
-/* 行内编辑输入与添加表单同视觉语言；url 列编辑态保持只读文本（灰化以示不可改） */
-.url-cell { color: #656d76; }
-.transport-cell { white-space: nowrap; }
-.transport-cell :deep(.el-input) { width: 130px; }
-.transport-cell :deep(.el-select) { width: 120px; }
+/* 行内编辑输入与添加表单同视觉语言；url 列编辑态保持只读文本（灰化以示不可改）。
+   td 由 el-table 自身 render 产出、不带父组件 scope 属性 → scoped 单类规则
+   （.url-cell[data-v] 等）静态失效，统一迁 .repos-table :deep(...) 穿透
+   （Overview .branch-table 先例；编译产物形如 .repos-table[data-v] td.url-cell）。
+   .gitcfg-tag 保留 scoped：el-tag 根在模板内、继承 scope 属性，规则本就存活 */
+.repos-table :deep(td.url-cell) { color: #656d76; }
+.repos-table :deep(td.transport-cell) { white-space: nowrap; }
+.repos-table :deep(.transport-cell .el-input) { width: 130px; }
+.repos-table :deep(.transport-cell .el-select) { width: 120px; }
 .transport-cell .gitcfg-tag { margin-left: 6px; }
 </style>
