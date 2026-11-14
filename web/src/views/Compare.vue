@@ -94,8 +94,9 @@ onMounted(async () => {
         <el-tag type="warning" size="small">{{ result.behind }}</el-tag> 个提交
       </p>
 
+      <!-- 响应式 hotfix：双列 xs 单列堆叠（CrossRepo 同款收敛），≥768 维持双列对照 -->
       <el-row :gutter="16">
-        <el-col :span="12">
+        <el-col :span="12" :xs="24">
           <h3>{{ base }} 独有（{{ result.aheadCommits.length }}）</h3>
           <ul class="rows">
             <li v-for="c in result.aheadCommits" :key="c.sha" class="row">
@@ -107,7 +108,7 @@ onMounted(async () => {
             <li v-if="result.aheadCommits.length === 0" class="muted">（无）</li>
           </ul>
         </el-col>
-        <el-col :span="12">
+        <el-col :span="12" :xs="24">
           <h3>{{ target }} 独有（{{ result.behindCommits.length }}）</h3>
           <ul class="rows">
             <li v-for="c in result.behindCommits" :key="c.sha" class="row">

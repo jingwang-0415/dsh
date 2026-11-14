@@ -16,7 +16,9 @@ body { font-family: system-ui, -apple-system, "PingFang SC", sans-serif; margin:
 .app-aside { border-right: 1px solid var(--el-border-color-light); }
 .app-menu { height: 100%; border-right: none; }
 .app-header { display: flex; align-items: center; justify-content: flex-end; border-bottom: 1px solid var(--el-border-color-light); }
-.app-main { width: 100%; max-width: 1080px; margin: 0 auto; }
+/* 响应式 hotfix：删除 1080px 内容帽与水平居中——内容区随视口全宽流式，
+   宽屏不再两侧留白；内边距由原 el-main 隐式 20px 收敛为显式 16px 24px */
+.app-main { width: 100%; padding: 16px 24px; }
 
 h2, h3 { margin: 12px 0 8px; }
 .muted { color: #656d76; font-size: 13px; }

@@ -190,8 +190,9 @@ function onRepoChange(): void {
 .status-row { display: flex; align-items: center; gap: 8px; }
 .status-row .status-alert { flex: 1; margin-bottom: 8px; }
 .sync-btn { flex-shrink: 0; }
-/* 仓库切换行：el-select 定宽（EP 无原生 select 的内建宽度） */
-.pick { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+/* 仓库切换行：el-select 定宽（EP 无原生 select 的内建宽度）；响应式 hotfix 补 wrap——
+   窄屏下按钮换行不再挤压 select（.repo-select 200px 定宽保留，单控件场景宽度合理） */
+.pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
 .repo-select { width: 200px; }
 /* 表格内徽标与行内容的间距（el-tag 无内建右距） */
 .branch-name { margin-right: 6px; }
