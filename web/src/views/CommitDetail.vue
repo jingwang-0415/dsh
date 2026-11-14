@@ -87,5 +87,5 @@ async function copyCherryPick(): Promise<void> {
 <style scoped>
 /* 布局就近提供（Repos 先例）：视觉（边框/暗色/状态色）交由 EP 组件与 html.dark 变量体系 */
 .commit-head { margin-bottom: 4px; }
-.commit-meta { margin-top: 8px; max-width: 720px; }
+.commit-meta { margin-top: 8px; }
 </style>

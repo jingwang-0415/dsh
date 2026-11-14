@@ -139,13 +139,16 @@ onMounted(async () => {
     <el-alert v-if="error" class="error-alert" type="error" :title="error" :closable="false" />
 
     <template v-if="result">
-      <!-- 统计行：简化 el-row/el-col（映射指引二选一，取轻量版，数值语义逐键保留） -->
+      <!-- 统计行：简化 el-row/el-col（映射指引二选一，取轻量版，数值语义逐键保留）
+           响应式 hotfix：断点逐列收敛——窄屏（xs）两列堆叠、sm 起统计三列一行 +
+           独有两列一行、md 起五列合为一行（4×3+6×2=24 恰好单行，md 取 4 避免 6×5 换行孤儿列）；
+           span 保留为 xl（≥1920）未命中断点时的回退位（与 lg 同值，宽屏行为不变） -->
       <el-row class="stats-row" :gutter="8">
-        <el-col :span="4"><span class="muted">A 共</span> {{ result.stats.aTotal }}</el-col>
-        <el-col :span="4"><span class="muted">B 共</span> {{ result.stats.bTotal }}</el-col>
-        <el-col :span="4"><span class="muted">同补丁</span> {{ result.stats.matched }}</el-col>
-        <el-col :span="6"><span class="muted">{{ result.branchPair.repoA }} 独有</span> {{ result.stats.onlyA }}</el-col>
-        <el-col :span="6"><span class="muted">{{ result.branchPair.repoB }} 独有</span> {{ result.stats.onlyB }}</el-col>
+        <el-col :span="4" :xs="12" :sm="8" :md="4" :lg="4"><span class="muted">A 共</span> {{ result.stats.aTotal }}</el-col>
+        <el-col :span="4" :xs="12" :sm="8" :md="4" :lg="4"><span class="muted">B 共</span> {{ result.stats.bTotal }}</el-col>
+        <el-col :span="4" :xs="12" :sm="8" :md="4" :lg="4"><span class="muted">同补丁</span> {{ result.stats.matched }}</el-col>
+        <el-col :span="6" :xs="12" :sm="12" :md="6" :lg="6"><span class="muted">{{ result.branchPair.repoA }} 独有</span> {{ result.stats.onlyA }}</el-col>
+        <el-col :span="6" :xs="12" :sm="12" :md="6" :lg="6"><span class="muted">{{ result.branchPair.repoB }} 独有</span> {{ result.stats.onlyB }}</el-col>
       </el-row>
       <p
         v-if="result.unpairedBranches.repoA.length || result.unpairedBranches.repoB.length"
@@ -163,8 +166,9 @@ onMounted(async () => {
         <li v-if="result.matchedPairs.length === 0" class="muted">（无 —— 全部为单向独有改动）</li>
       </ul>
 
+      <!-- 响应式 hotfix：xs 单列堆叠（:xs="24"），≥768 维持双列对照 -->
       <el-row :gutter="16">
-        <el-col :span="12">
+        <el-col :span="12" :xs="24">
           <h3>{{ result.branchPair.repoA }} 独有（{{ result.onlyInA.length }}）</h3>
           <ul class="rows">
             <li v-for="c in result.onlyInA" :key="c.sha" class="row">
@@ -176,7 +180,7 @@ onMounted(async () => {
             <li v-if="result.onlyInA.length === 0" class="muted">（无）</li>
           </ul>
         </el-col>
-        <el-col :span="12">
+        <el-col :span="12" :xs="24">
           <h3>{{ result.branchPair.repoB }} 独有（{{ result.onlyInB.length }}）</h3>
           <ul class="rows">
             <li v-for="c in result.onlyInB" :key="c.sha" class="row">

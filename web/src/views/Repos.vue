@@ -381,8 +381,12 @@ onMounted(() => { void refresh() })
 <style scoped>
 /* style.css 不在本任务修改清单内：表单布局以 scoped 规则就近提供（CrossRepo 先例）；
    v1.6 EP 迁移后控件视觉（边框/暗色）交由 EP 组件与 html.dark 变量体系，scoped 只管布局 */
-.add-form { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: flex-start; margin-bottom: 16px; }
-.add-form :deep(.el-form-item) { margin-bottom: 8px; }
+/* 响应式 hotfix：wrap 原已具备（v1.6 先例），本轮补换行行距（row-gap 4→12px）与
+   表单项 min-width 收敛——窄屏下 el-input 不再被 flex 挤压塌缩；
+   min-width 放在 .el-form-item（flex 子项）上而非 .el-input，避免覆盖
+   .add-proxy/.add-gitcfg 的 280px（后者 specificity 更低会被 :deep 规则压过） */
+.add-form { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-start; margin-bottom: 16px; }
+.add-form :deep(.el-form-item) { margin-bottom: 8px; min-width: 200px; }
 .transport-group { display: flex; flex-direction: column; gap: 6px; font-size: 13px; padding-top: 4px; }
 .transport-title { font-weight: 600; }
 .proxy-mode-row, .gitcfg-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
